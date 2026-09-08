@@ -67,7 +67,14 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         }
     }
 
-    public IPlaybackTrackController Tracks => _trackController;
+    public IPlaybackTrackController Tracks
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _trackController;
+        }
+    }
 
     public TimeSpan Position
     {
