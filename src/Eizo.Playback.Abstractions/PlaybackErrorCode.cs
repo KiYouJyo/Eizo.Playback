@@ -14,6 +14,8 @@ public enum PlaybackErrorCode
     TrackSelectionFailed,
     ExternalSubtitleFailed,
     DelayUpdateFailed,
+    TitleNotFound,
+    ChapterNotFound,
     BackendInitializationFailed,
     BackendFailure
 }
