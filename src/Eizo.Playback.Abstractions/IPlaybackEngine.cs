@@ -12,6 +12,8 @@ public interface IPlaybackEngine : IAsyncDisposable
 
     double PlaybackRate { get; set; }
 
+    IPlaybackTrackController Tracks { get; }
+
     event EventHandler<PlaybackStateChangedEventArgs>? StateChanged;
 
     event EventHandler<PlaybackPositionChangedEventArgs>? PositionChanged;
