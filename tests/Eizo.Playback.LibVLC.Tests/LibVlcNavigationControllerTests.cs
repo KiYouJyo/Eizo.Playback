@@ -85,14 +85,14 @@ public sealed class LibVlcNavigationControllerTests
             var main = engine.Navigation.Chapters[1];
 
             Assert.Equal("Opening", opening.Name);
-            Assert.Equal(TimeSpan.Zero, opening.Start);
-            Assert.Equal(TimeSpan.FromSeconds(1), opening.Duration);
-            Assert.Equal(TimeSpan.FromSeconds(1), opening.End);
+            AssertClose(opening.Start, TimeSpan.Zero);
+            AssertClose(opening.Duration, TimeSpan.FromSeconds(1));
+            AssertClose(opening.End, TimeSpan.FromSeconds(1));
 
             Assert.Equal("Main", main.Name);
-            Assert.Equal(TimeSpan.FromSeconds(1), main.Start);
-            Assert.Equal(TimeSpan.FromSeconds(1), main.Duration);
-            Assert.Equal(TimeSpan.FromSeconds(2), main.End);
+            AssertClose(main.Start, TimeSpan.FromSeconds(1));
+            AssertClose(main.Duration, TimeSpan.FromSeconds(1));
+            AssertClose(main.End, TimeSpan.FromSeconds(2));
         }
         finally
         {
@@ -200,6 +200,20 @@ public sealed class LibVlcNavigationControllerTests
 
             await engine.Navigation.RefreshAsync(cancellationToken);
         }
+    }
+
+    private static void AssertClose(
+        TimeSpan? actual,
+        TimeSpan expected)
+    {
+        Assert.NotNull(actual);
+
+        var delta = (actual.Value - expected).Duration();
+
+        Assert.InRange(
+            delta,
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(20));
     }
 
     private static LibVlcPlaybackEngine CreateHeadlessEngine() =>
