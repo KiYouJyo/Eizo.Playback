@@ -10,6 +10,10 @@ public enum PlaybackErrorCode
     PlayFailed,
     NotSeekable,
     InvalidPosition,
+    TrackNotFound,
+    TrackSelectionFailed,
+    ExternalSubtitleFailed,
+    DelayUpdateFailed,
     BackendInitializationFailed,
     BackendFailure
 }
