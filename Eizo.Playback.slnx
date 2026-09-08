@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Eizo.Playback.Abstractions/Eizo.Playback.Abstractions.csproj" />
+    <Project Path="src/Eizo.Playback.Core/Eizo.Playback.Core.csproj" />
+    <Project Path="src/Eizo.Playback.LibVLC/Eizo.Playback.LibVLC.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Eizo.Playback.Core.Tests/Eizo.Playback.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+</Solution>

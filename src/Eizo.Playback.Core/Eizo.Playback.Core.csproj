@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Eizo.Playback.Core</AssemblyName>
+    <RootNamespace>Eizo.Playback.Core</RootNamespace>
+    <Description>Backend-neutral playback state and orchestration for Eizo.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Eizo.Playback.Abstractions/Eizo.Playback.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
