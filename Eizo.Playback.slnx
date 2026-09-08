@@ -8,7 +8,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Eizo.Playback.Core.Tests/Eizo.Playback.Core.Tests.csproj" />
     <Project Path="tests/Eizo.Playback.LibVLC.Tests/Eizo.Playback.LibVLC.Tests.csproj" />
-    <Project Path="tests/Eizo.Playback.LibVLC.WinUI.Tests/Eizo.Playback.LibVLC.WinUI.Tests.csproj" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
