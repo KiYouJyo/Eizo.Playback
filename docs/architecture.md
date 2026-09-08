@@ -16,7 +16,7 @@ Allowed dependencies: .NET BCL.
 
 Forbidden dependencies: LibVLCSharp, WinUI, Eizo application/database types.
 
-The engine exposes media-track capabilities through `IPlaybackTrackController` and title/chapter capabilities through `IPlaybackNavigationController`, keeping the main playback lifecycle API compact.
+The engine exposes media-track capabilities through `IPlaybackTrackController`, title/chapter capabilities through `IPlaybackNavigationController`, and diagnostics through `IPlaybackDiagnosticsController`.
 
 ### Eizo.Playback.Core
 
@@ -39,6 +39,10 @@ This assembly exposes only backend-neutral public behavior. Its native `MediaPla
 `LibVlcTrackController` owns elementary-stream mapping.
 
 `LibVlcNavigationController` owns title/chapter discovery, timeline mapping and chapter navigation.
+
+`LibVlcDiagnosticsController` owns observational runtime information such as backend version, capabilities, buffering, media statistics and selected track summaries.
+
+Diagnostics are not allowed to expose the full media URI or local path.
 
 Chapter timing comes from LibVLC's full chapter descriptions when available, with legacy name-only chapter descriptions as fallback.
 
@@ -110,9 +114,28 @@ The navigation controller refreshes on:
 - title changed
 - chapter changed
 
-A normal Matroska episode may expose chapters without exposing any titles. Therefore chapter discovery does not depend on the public title list being non-empty.
+A normal Matroska episode may expose chapters with no authored title hierarchy, while LibVLC may also synthesize a segment title. Chapter availability must therefore be checked directly.
 
 LibVLC negative title/chapter indices are normalized to nullable selected indices.
+
+## Diagnostics lifecycle
+
+Diagnostics are snapshot-based.
+
+Native callbacks attempt a non-blocking best-effort refresh. If the diagnostics lock is busy, the callback skips that refresh rather than blocking LibVLC.
+
+The application may call `Diagnostics.RefreshAsync()` when it needs an authoritative current snapshot.
+
+The diagnostic model exposes only input kind and URI scheme, never the complete input URI.
+
+LibVLC 3 exposes a configuration switch for hardware decoding but does not expose a reliable cross-platform public API that proves which decoder path is active. Therefore:
+
+```text
+HardwareDecodingRequested = true/false
+HardwareDecodingActive    = null unless a backend can prove it
+```
+
+No inference from CPU/GPU usage is made inside the adapter.
 
 ## Policy separation
 
@@ -122,7 +145,7 @@ Those decisions belong to a higher Eizo policy layer so the playback adapter rem
 
 ## Event threading
 
-LibVLC playback, track and navigation callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
+LibVLC playback, track, navigation and diagnostics callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
 
 The application must marshal those events before changing UI-bound state.
 
@@ -134,6 +157,6 @@ The application must marshal those events before changing UI-bound state.
 2. LibVLC lifecycle, position/duration, seek and event bridge. **Complete**
 3. WinUI video-surface integration behind an Eizo-owned boundary. **Complete**
 4. Audio/video/subtitle track mapping. **Complete**
-5. Chapters and title mapping. **Stage 4**
-6. Diagnostics and error mapping.
+5. Chapters and title mapping. **Complete**
+6. Diagnostics and runtime information. **Stage 5**
 7. Contract tests and media compatibility suite.

@@ -16,6 +16,8 @@ public interface IPlaybackEngine : IAsyncDisposable
 
     IPlaybackNavigationController Navigation { get; }
 
+    IPlaybackDiagnosticsController Diagnostics { get; }
+
     event EventHandler<PlaybackStateChangedEventArgs>? StateChanged;
 
     event EventHandler<PlaybackPositionChangedEventArgs>? PositionChanged;

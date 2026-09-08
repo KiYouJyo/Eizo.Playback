@@ -11,6 +11,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly LibVlcTrackController _trackController;
     private readonly LibVlcNavigationController _navigationController;
+    private readonly LibVlcDiagnosticsController _diagnosticsController;
 
     private bool _hasMedia;
     private int _disposeState;
@@ -42,6 +43,11 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             _mediaPlayer = mediaPlayer;
             _trackController = new LibVlcTrackController(mediaPlayer);
             _navigationController = new LibVlcNavigationController(mediaPlayer);
+            _diagnosticsController = new LibVlcDiagnosticsController(
+                libVlc,
+                mediaPlayer,
+                _trackController,
+                options);
 
             HookEvents();
             _stateMachine.StateChanged += OnStateMachineStateChanged;
@@ -84,6 +90,15 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         {
             ThrowIfDisposed();
             return _navigationController;
+        }
+    }
+
+    public IPlaybackDiagnosticsController Diagnostics
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _diagnosticsController;
         }
     }
 
@@ -193,6 +208,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 _navigationController.Reset();
                 _mediaPlayer.Media = media;
                 _hasMedia = true;
+                _diagnosticsController.SetSource(source);
 
                 _stateMachine.SetState(PlaybackState.Stopped);
                 PositionChanged?.Invoke(
@@ -383,6 +399,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
             UnhookEvents();
             _stateMachine.StateChanged -= OnStateMachineStateChanged;
+            await _diagnosticsController.DisposeAsync().ConfigureAwait(false);
             await _trackController.DisposeAsync().ConfigureAwait(false);
             await _navigationController.DisposeAsync().ConfigureAwait(false);
 
