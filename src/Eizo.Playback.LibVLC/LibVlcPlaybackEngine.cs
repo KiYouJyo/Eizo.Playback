@@ -9,6 +9,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private readonly MediaPlayer _mediaPlayer;
     private readonly PlaybackStateMachine _stateMachine = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private readonly LibVlcTrackController _trackController;
 
     private bool _hasMedia;
     private int _disposeState;
@@ -38,6 +39,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
             _libVlc = libVlc;
             _mediaPlayer = mediaPlayer;
+            _trackController = new LibVlcTrackController(mediaPlayer);
 
             HookEvents();
             _stateMachine.StateChanged += OnStateMachineStateChanged;
@@ -64,6 +66,8 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             return _mediaPlayer;
         }
     }
+
+    public IPlaybackTrackController Tracks => _trackController;
 
     public TimeSpan Position
     {
@@ -167,6 +171,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             try
             {
                 using var media = new Media(_libVlc, source.Uri);
+                _trackController.Reset();
                 _mediaPlayer.Media = media;
                 _hasMedia = true;
 
@@ -359,6 +364,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
             UnhookEvents();
             _stateMachine.StateChanged -= OnStateMachineStateChanged;
+            await _trackController.DisposeAsync().ConfigureAwait(false);
 
             _mediaPlayer.Dispose();
             _libVlc.Dispose();
