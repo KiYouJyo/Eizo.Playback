@@ -19,10 +19,12 @@ src/
 
 tests/
   Eizo.Playback.Core.Tests/     Backend-neutral unit tests
+  Eizo.Playback.LibVLC.Tests/   Windows/native LibVLC smoke tests
 
 docs/
   architecture.md
   dependencies.md
+  playback-contract.md
 ```
 
 ## Dependency direction
@@ -49,9 +51,31 @@ The Eizo application must not reference LibVLCSharp directly.
 
 ## Current status
 
-**Stage 0 — repository/bootstrap architecture.**
+**Stage 1 — LibVLC playback lifecycle.**
 
-The first functional milestone will add the minimum LibVLC lifecycle required for open, play, pause, stop, seek, position and duration.
+Implemented:
+
+- backend initialization
+- local/URI media open
+- play / pause / stop
+- seek
+- normalized volume
+- playback rate
+- position and duration
+- playback state bridge
+- position / duration events
+- asynchronous failure event
+- backend-neutral error model
+- deterministic native resource disposal
+- Windows LibVLC smoke tests
+
+Not yet included:
+
+- WinUI video-surface integration
+- audio-track selection
+- subtitle-track selection
+- chapters
+- media diagnostics
 
 ## Build
 
