@@ -4,7 +4,7 @@
 
 Eizo.Playback is a boundary between the Eizo application and the selected media backend.
 
-The public application-facing API must remain independent from LibVLCSharp so UI and media-library work can continue in parallel with backend work.
+The public application-facing API remains independent from LibVLCSharp so UI and media-library work can continue in parallel with backend work.
 
 ## Project boundaries
 
@@ -15,8 +15,6 @@ Owns only stable public contracts and backend-neutral models.
 Allowed dependencies: .NET BCL.
 
 Forbidden dependencies: LibVLCSharp, WinUI, Eizo application/database types.
-
-Stage 1 public capabilities include playback lifecycle operations, normalized volume, playback rate, state, position, duration and backend-neutral errors.
 
 ### Eizo.Playback.Core
 
@@ -30,13 +28,23 @@ The playback state machine uses atomic state storage because native backend call
 
 ### Eizo.Playback.LibVLC
 
-Owns all mapping to LibVLCSharp and the native LibVLC runtime.
+Owns mapping to LibVLCSharp and the native LibVLC runtime.
 
-This is the only current project allowed to reference LibVLCSharp.
+This assembly exposes only backend-neutral public behavior. Its native `MediaPlayer` bridge is internal and is visible only to the WinUI integration assembly.
 
-`LibVlcPlaybackEngine` owns one LibVLC instance and one MediaPlayer for its lifetime. The Eizo application should normally keep one engine alive for the lifetime of the player experience rather than creating a new native runtime for every episode.
+`LibVlcPlaybackEngine` owns one LibVLC instance and one MediaPlayer for its lifetime.
 
-LibVLC input handling is disabled so keyboard and mouse ownership remains with the Eizo UI.
+LibVLC input handling is disabled so keyboard and mouse ownership remains with the Eizo application.
+
+### Eizo.Playback.LibVLC.WinUI
+
+Owns the WinUI 3 video surface.
+
+LibVLC 3 requires the D3D11 context and swap-chain pointers when the native LibVLC instance is created. Those pointers do not exist until LibVLCSharp's WinUI `VideoView` has initialized.
+
+Therefore the WinUI layer creates the playback engine after `VideoView.Initialized`.
+
+The application receives only `IPlaybackEngine` through `PlaybackView.Engine` and `PlaybackView.EngineChanged`.
 
 ## Dependency rule
 
@@ -44,31 +52,51 @@ LibVLC input handling is disabled so keyboard and mouse ownership remains with t
 Eizo UI / Library
         |
         v
-Eizo.Playback.Abstractions
+Eizo.Playback.LibVLC.WinUI
         |
-        v
-Eizo.Playback.Core
-        |
-        v
-Eizo.Playback.LibVLC
-        |
-        v
-LibVLCSharp -> LibVLC
+        +----------------------------+
+        |                            |
+        v                            v
+Eizo.Playback.Abstractions   Eizo.Playback.LibVLC
+                                     |
+                                     v
+                                LibVLCSharp
+                                     |
+                                     v
+                                   LibVLC
 ```
 
-No LibVLC type may appear in public contracts exposed to the Eizo application.
+No LibVLCSharp type appears in the public application-facing surface contract.
+
+## Surface lifecycle
+
+The WinUI `VideoView` owns a D3D11 swap chain and destroys it when unloaded.
+
+A LibVLC 3 instance initialized against one swap chain must not continue to be used after that swap chain is destroyed.
+
+Consequently:
+
+1. `PlaybackView` receives the live swap-chain options.
+2. It creates a `LibVlcPlaybackEngine` with those options.
+3. It exposes that engine to the Eizo application.
+4. When the view unloads, the engine is disposed.
+5. If the view later receives a new swap chain, a new engine is created.
+
+The UI should treat the engine as scoped to the currently live `PlaybackView`.
 
 ## Event threading
 
-LibVLC callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
+LibVLC playback callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
 
-The future WinUI integration package or the Eizo UI must marshal callbacks through its dispatcher before changing UI-bound state.
+The application must marshal playback events before changing UI-bound state.
+
+`PlaybackView.EngineChanged` and `PlaybackView.InitializationFailed` are surface lifecycle events and normally originate on the WinUI thread.
 
 ## Planned milestones
 
 1. Repository and contract baseline. **Complete**
-2. LibVLC lifecycle, position/duration, seek and event bridge. **Stage 1**
-3. WinUI video-surface integration behind an Eizo-owned boundary.
+2. LibVLC lifecycle, position/duration, seek and event bridge. **Complete**
+3. WinUI video-surface integration behind an Eizo-owned boundary. **Stage 2**
 4. Audio/subtitle track mapping.
 5. Chapters and title mapping.
 6. Diagnostics and error mapping.
