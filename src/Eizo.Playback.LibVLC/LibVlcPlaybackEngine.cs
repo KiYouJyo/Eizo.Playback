@@ -17,27 +17,36 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     {
         options ??= new LibVlcPlaybackOptions();
 
+        LibVLCSharp.Shared.LibVLC? libVlc = null;
+        MediaPlayer? mediaPlayer = null;
+
         try
         {
-            Core.Initialize();
+            LibVLCSharp.Shared.Core.Initialize();
 
-            _libVlc = new LibVLCSharp.Shared.LibVLC(
+            libVlc = new LibVLCSharp.Shared.LibVLC(
                 options.EnableDebugLogs,
                 options.Arguments.ToArray());
 
-            _mediaPlayer = new MediaPlayer(_libVlc)
+            mediaPlayer = new MediaPlayer(libVlc)
             {
                 EnableHardwareDecoding = options.EnableHardwareDecoding
             };
 
-            _mediaPlayer.EnableKeyInput = false;
-            _mediaPlayer.EnableMouseInput = false;
+            mediaPlayer.EnableKeyInput = false;
+            mediaPlayer.EnableMouseInput = false;
+
+            _libVlc = libVlc;
+            _mediaPlayer = mediaPlayer;
 
             HookEvents();
             _stateMachine.StateChanged += OnStateMachineStateChanged;
         }
         catch (Exception exception)
         {
+            mediaPlayer?.Dispose();
+            libVlc?.Dispose();
+
             throw new PlaybackException(
                 PlaybackErrorCode.BackendInitializationFailed,
                 "Failed to initialize the LibVLC playback backend.",
