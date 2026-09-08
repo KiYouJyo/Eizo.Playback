@@ -34,6 +34,42 @@ jobs:
       - name: Pack
         run: dotnet pack Eizo.Playback.slnx --configuration Release --no-build --output artifacts/packages
 
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $expected = @(
+            'Eizo.Playback.Abstractions.0.1.0.nupkg',
+            'Eizo.Playback.Core.0.1.0.nupkg',
+            'Eizo.Playback.LibVLC.0.1.0.nupkg',
+            'Eizo.Playback.LibVLC.WinUI.0.1.0.nupkg'
+          )
+
+          $packages = Get-ChildItem artifacts/packages/*.nupkg
+          $actual = @($packages | ForEach-Object Name | Sort-Object)
+          $wanted = @($expected | Sort-Object)
+
+          if (Compare-Object $wanted $actual) {
+            throw "Unexpected NuGet package set. Expected: $($wanted -join ', '); actual: $($actual -join ', ')"
+          }
+
+          foreach ($package in $packages) {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+            try {
+              $entries = @($archive.Entries | ForEach-Object FullName)
+              if ($entries -notcontains 'README.md') {
+                throw "$($package.Name) does not contain README.md"
+              }
+              if (-not ($entries | Where-Object { $_ -like '*.nuspec' })) {
+                throw "$($package.Name) does not contain a nuspec"
+              }
+            }
+            finally {
+              $archive.Dispose()
+            }
+          }
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v4
         with:
