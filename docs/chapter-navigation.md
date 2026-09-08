@@ -24,21 +24,11 @@ If a backend only exposes chapter names, timing values may be null.
 
 ## Matroska episodes
 
-Anime and drama MKV/MKA files commonly contain chapters without a meaningful title hierarchy.
+Anime and drama MKV/MKA files commonly contain chapters without a meaningful authored title hierarchy.
 
-For that reason:
+Depending on LibVLC/container behavior, the backend may either expose no titles or synthesize a segment title such as `Segment 0`.
 
-```text
-Titles.Count == 0
-```
-
-does not imply:
-
-```text
-Chapters.Count == 0
-```
-
-The UI should display chapters whenever the chapter collection is non-empty.
+Therefore the UI must not infer chapter availability from the title collection. Display chapters whenever the chapter collection is non-empty.
 
 ## Selection
 
