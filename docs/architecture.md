@@ -10,11 +10,13 @@ The public application-facing API remains independent from LibVLCSharp so UI and
 
 ### Eizo.Playback.Abstractions
 
-Owns only stable public contracts and backend-neutral models.
+Owns stable public contracts and backend-neutral models.
 
 Allowed dependencies: .NET BCL.
 
 Forbidden dependencies: LibVLCSharp, WinUI, Eizo application/database types.
+
+The engine exposes media-track capabilities through `IPlaybackTrackController`, keeping the main playback lifecycle API compact.
 
 ### Eizo.Playback.Core
 
@@ -33,6 +35,10 @@ Owns mapping to LibVLCSharp and the native LibVLC runtime.
 This assembly exposes only backend-neutral public behavior. Its native `MediaPlayer` bridge is internal and is visible only to the WinUI integration assembly.
 
 `LibVlcPlaybackEngine` owns one LibVLC instance and one MediaPlayer for its lifetime.
+
+`LibVlcTrackController` owns the backend-specific mapping between LibVLC elementary streams and Eizo track models.
+
+Track descriptions are enriched from the current `Media.Tracks` metadata when available.
 
 LibVLC input handling is disabled so keyboard and mouse ownership remains with the Eizo application.
 
@@ -84,11 +90,26 @@ Consequently:
 
 The UI should treat the engine as scoped to the currently live `PlaybackView`.
 
+## Track lifecycle
+
+LibVLC track descriptions are most complete once an input is active.
+
+The track controller refreshes automatically on:
+
+- playback start
+- elementary stream added
+- elementary stream deleted
+- elementary stream selected
+
+The application can also request an explicit refresh.
+
+Negative LibVLC pseudo-track IDs are not exposed. Nullable selected-track IDs represent disabled/unselected tracks.
+
 ## Event threading
 
-LibVLC playback callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
+LibVLC playback and track callbacks are translated into backend-neutral events, but those events intentionally do not claim WinUI thread affinity.
 
-The application must marshal playback events before changing UI-bound state.
+The application must marshal playback and track events before changing UI-bound state.
 
 `PlaybackView.EngineChanged` and `PlaybackView.InitializationFailed` are surface lifecycle events and normally originate on the WinUI thread.
 
@@ -96,8 +117,8 @@ The application must marshal playback events before changing UI-bound state.
 
 1. Repository and contract baseline. **Complete**
 2. LibVLC lifecycle, position/duration, seek and event bridge. **Complete**
-3. WinUI video-surface integration behind an Eizo-owned boundary. **Stage 2**
-4. Audio/subtitle track mapping.
+3. WinUI video-surface integration behind an Eizo-owned boundary. **Complete**
+4. Audio/video/subtitle track mapping. **Stage 3**
 5. Chapters and title mapping.
 6. Diagnostics and error mapping.
 7. Contract tests and media compatibility suite.
