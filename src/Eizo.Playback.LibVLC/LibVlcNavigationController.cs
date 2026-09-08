@@ -1,4 +1,5 @@
 using LibVLCSharp.Shared;
+using LibVLCSharp.Shared.Structures;
 
 namespace Eizo.Playback.Backends.LibVLC;
 
