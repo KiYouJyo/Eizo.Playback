@@ -23,7 +23,9 @@ public sealed class LibVlcPlaybackEngineTests
             Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mkv"));
 
         var exception = await Assert.ThrowsAsync<PlaybackException>(
-            async () => await engine.OpenAsync(source));
+            async () => await engine.OpenAsync(
+                source,
+                TestContext.Current.CancellationToken));
 
         Assert.Equal(PlaybackErrorCode.FileNotFound, exception.Code);
     }
@@ -32,13 +34,20 @@ public sealed class LibVlcPlaybackEngineTests
     public async Task OpenExistingFileTransitionsToStopped()
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+        var cancellationToken = TestContext.Current.CancellationToken;
 
         try
         {
-            await File.WriteAllBytesAsync(path, [0x45, 0x49, 0x5A, 0x4F]);
+            await File.WriteAllBytesAsync(
+                path,
+                [0x45, 0x49, 0x5A, 0x4F],
+                cancellationToken);
+
             await using var engine = new LibVlcPlaybackEngine();
 
-            await engine.OpenAsync(PlaybackSource.FromFile(path));
+            await engine.OpenAsync(
+                PlaybackSource.FromFile(path),
+                cancellationToken);
 
             Assert.Equal(PlaybackState.Stopped, engine.State);
         }
