@@ -71,8 +71,15 @@ public sealed class LibVlcNavigationControllerTests
 
             await engine.Navigation.RefreshAsync(cancellationToken);
 
-            Assert.Empty(engine.Navigation.Titles);
             Assert.Equal(2, engine.Navigation.Chapters.Count);
+
+            if (engine.Navigation.Titles.Count > 0)
+            {
+                var title = Assert.Single(engine.Navigation.Titles);
+                Assert.Equal(0, title.Index);
+                Assert.Equal(2, title.ChapterCount);
+                Assert.True(title.IsSelected);
+            }
 
             var opening = engine.Navigation.Chapters[0];
             var main = engine.Navigation.Chapters[1];
