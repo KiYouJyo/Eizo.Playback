@@ -158,5 +158,5 @@ The application must marshal those events before changing UI-bound state.
 3. WinUI video-surface integration behind an Eizo-owned boundary. **Complete**
 4. Audio/video/subtitle track mapping. **Complete**
 5. Chapters and title mapping. **Complete**
-6. Diagnostics and runtime information. **Stage 5**
-7. Contract tests and media compatibility suite.
+6. Diagnostics and runtime information. **Complete**
+7. Contract tests, compatibility matrix and release hardening. **Stage 6**
