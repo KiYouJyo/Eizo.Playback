@@ -28,6 +28,7 @@ public sealed class LibVlcPlaybackEngineTests
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(PlaybackErrorCode.FileNotFound, exception.Code);
+        Assert.Equal(PlaybackState.Idle, engine.State);
     }
 
     [Fact]
@@ -50,11 +51,27 @@ public sealed class LibVlcPlaybackEngineTests
                 cancellationToken);
 
             Assert.Equal(PlaybackState.Stopped, engine.State);
+
+            await engine.PauseAsync(cancellationToken);
+
+            Assert.Equal(PlaybackState.Stopped, engine.State);
         }
         finally
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task DisposeAsyncIsIdempotent()
+    {
+        var engine = new LibVlcPlaybackEngine();
+
+        await engine.DisposeAsync();
+        await engine.DisposeAsync();
+
+        Assert.Throws<ObjectDisposedException>(() => _ = engine.Position);
+        Assert.Throws<ObjectDisposedException>(() => _ = engine.Duration);
     }
 
     [Theory]
