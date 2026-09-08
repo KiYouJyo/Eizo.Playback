@@ -1,11 +1,11 @@
 using LibVLCSharp.Shared;
 
-namespace Eizo.Playback.LibVLC;
+namespace Eizo.Playback.Backends.LibVLC;
 
 public static class LibVlcBackendInfo
 {
     public const string Name = "LibVLC";
 
     public static Version? WrapperAssemblyVersion =>
-        typeof(LibVLC).Assembly.GetName().Version;
+        typeof(LibVLCSharp.Shared.LibVLC).Assembly.GetName().Version;
 }
