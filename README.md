@@ -27,6 +27,7 @@ docs/
   chapter-navigation.md
   dependencies.md
   playback-contract.md
+  playback-diagnostics.md
   track-management.md
   winui-integration.md
 ```
@@ -54,7 +55,7 @@ The Eizo application does not need to reference LibVLCSharp directly.
 
 ## Current status
 
-**Stage 4 — title/chapter navigation.**
+**Stage 5 — playback diagnostics.**
 
 Implemented:
 
@@ -68,18 +69,22 @@ Implemented:
 - D3D11 swap-chain bootstrap for LibVLC 3
 - audio/video/subtitle track discovery and selection
 - external subtitles and A/V subtitle delay
-- title discovery and selection
-- chapter discovery and selection
-- chapter name, start, duration and end time
-- next/previous chapter navigation
-- LibVLC title/chapter change tracking
+- title/chapter discovery and navigation
+- chapter timing
+- backend/runtime diagnostics
+- seek/pause/video-output capability reporting
+- runtime FPS and buffering percentage
+- selected track diagnostic summaries
+- media read/demux/decode/display/loss statistics
+- privacy-safe input classification
+- hardware-decoding requested/confirmed distinction
 - Windows/native integration tests
 - NuGet pack validation
 
 Not yet included:
 
 - automatic OP/ED semantic classification
-- media diagnostics
+- compatibility matrix / broader media corpus
 - application player chrome
 
 ## Build
