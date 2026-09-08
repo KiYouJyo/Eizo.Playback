@@ -12,7 +12,8 @@ public sealed class LibVlcDiagnosticsControllerTests
         var snapshot = engine.Diagnostics.Current;
 
         Assert.Equal("LibVLC", snapshot.Backend.Name);
-        Assert.StartsWith("3.", snapshot.Backend.Version);
+        var backendVersion = Assert.IsType<string>(snapshot.Backend.Version);
+        Assert.StartsWith("3.", backendVersion);
         Assert.NotNull(snapshot.Backend.WrapperVersion);
         Assert.True(snapshot.Backend.HardwareDecodingRequested);
         Assert.Null(snapshot.Backend.HardwareDecodingActive);
@@ -104,11 +105,11 @@ public sealed class LibVlcDiagnosticsControllerTests
             Assert.NotNull(snapshot.SelectedAudioTrack);
             Assert.Null(snapshot.SelectedVideoTrack);
 
-            Assert.NotNull(snapshot.Statistics);
-            Assert.True(snapshot.Statistics.ReadBytes >= 0);
-            Assert.True(snapshot.Statistics.DemuxReadBytes >= 0);
-            Assert.True(snapshot.Statistics.DecodedAudio >= 0);
-            Assert.True(snapshot.Statistics.LostAudioBuffers >= 0);
+            var statistics = Assert.IsType<PlaybackMediaStatistics>(snapshot.Statistics);
+            Assert.True(statistics.ReadBytes >= 0);
+            Assert.True(statistics.DemuxReadBytes >= 0);
+            Assert.True(statistics.DecodedAudio >= 0);
+            Assert.True(statistics.LostAudioBuffers >= 0);
         }
         finally
         {
