@@ -4,7 +4,7 @@ This document defines the application-facing behavior of `IPlaybackEngine`.
 
 ## Backend isolation
 
-The public contract must never expose:
+The public engine contract must never expose:
 
 - `LibVLC`
 - `MediaPlayer`
@@ -12,7 +12,7 @@ The public contract must never expose:
 - `VLCState`
 - any other LibVLCSharp type
 
-The Eizo UI is expected to depend on `Eizo.Playback.Abstractions`, not on LibVLCSharp.
+The Eizo application may reference `Eizo.Playback.LibVLC.WinUI` to host video, but playback control continues through `IPlaybackEngine`.
 
 ## Lifecycle
 
@@ -45,6 +45,16 @@ Any asynchronous backend playback failure -> Failed
 ```
 
 `OpenAsync` attaches a source but does not automatically start playback.
+
+## WinUI surface ownership
+
+On WinUI 3, `PlaybackView` owns creation of the LibVLC-backed engine because LibVLC 3 must receive the live swap-chain arguments at construction time.
+
+The engine exposed through `PlaybackView.Engine` is valid only for the current live surface.
+
+If the surface unloads and is later recreated, `EngineChanged` may provide a new engine instance.
+
+The Eizo application must not cache a surface-scoped engine indefinitely across view destruction.
 
 ## Position and duration
 
@@ -81,7 +91,7 @@ Backend rejection is surfaced as a `PlaybackException`.
 
 ## Events
 
-The Stage 1 contract exposes:
+The engine contract exposes:
 
 - `StateChanged`
 - `PositionChanged`
@@ -94,16 +104,16 @@ Playback events do **not** have UI-thread affinity.
 
 A UI integration layer must marshal event handling to its dispatcher before touching WinUI controls or observable UI state.
 
-This keeps the core playback package independent from WinUI.
-
 ## Errors
 
 Synchronous operation failures throw `PlaybackException` with a backend-neutral `PlaybackErrorCode`.
 
 Errors that occur asynchronously after a play request are surfaced through `Failed` and transition the engine to `PlaybackState.Failed`.
 
+WinUI surface bootstrap failures are reported separately through `PlaybackView.InitializationFailed`.
+
 ## Disposal
 
-`DisposeAsync` is idempotent.
+`IPlaybackEngine.DisposeAsync` is idempotent.
 
-The LibVLC adapter owns its native `LibVLC` and `MediaPlayer` instances and releases them during disposal.
+`PlaybackView.DisposeAsync` disposes the current surface-scoped engine and detaches its surface lifecycle hooks.

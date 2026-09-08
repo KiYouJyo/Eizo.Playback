@@ -3,6 +3,7 @@
     <Project Path="src/Eizo.Playback.Abstractions/Eizo.Playback.Abstractions.csproj" />
     <Project Path="src/Eizo.Playback.Core/Eizo.Playback.Core.csproj" />
     <Project Path="src/Eizo.Playback.LibVLC/Eizo.Playback.LibVLC.csproj" />
+    <Project Path="src/Eizo.Playback.LibVLC.WinUI/Eizo.Playback.LibVLC.WinUI.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Eizo.Playback.Core.Tests/Eizo.Playback.Core.Tests.csproj" />

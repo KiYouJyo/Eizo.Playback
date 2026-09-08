@@ -56,6 +56,15 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
     public PlaybackState State => _stateMachine.State;
 
+    internal MediaPlayer NativeMediaPlayer
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _mediaPlayer;
+        }
+    }
+
     public TimeSpan Position
     {
         get
