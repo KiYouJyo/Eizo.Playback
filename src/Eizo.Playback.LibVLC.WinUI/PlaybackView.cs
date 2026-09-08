@@ -73,6 +73,9 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
         {
             await InitializeEngineAsync(eventArgs.SwapChainOptions).ConfigureAwait(true);
         }
+        catch (ObjectDisposedException) when (Volatile.Read(ref _disposeState) != 0)
+        {
+        }
         catch (Exception exception)
         {
             InitializationFailed?.Invoke(
@@ -86,6 +89,9 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
         try
         {
             await ReleaseEngineAsync().ConfigureAwait(true);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref _disposeState) != 0)
+        {
         }
         catch (Exception exception)
         {
@@ -119,7 +125,7 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
                 await previousEngine.DisposeAsync().ConfigureAwait(true);
             }
 
-            var options = LibVlcWinUiArguments.Compose(
+            var options = LibVlcSurfaceOptions.Compose(
                 _playbackOptions,
                 swapChainOptions);
 
