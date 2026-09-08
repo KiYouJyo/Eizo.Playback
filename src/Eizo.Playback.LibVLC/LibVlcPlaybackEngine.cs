@@ -10,6 +10,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private readonly PlaybackStateMachine _stateMachine = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly LibVlcTrackController _trackController;
+    private readonly LibVlcNavigationController _navigationController;
 
     private bool _hasMedia;
     private int _disposeState;
@@ -40,6 +41,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             _libVlc = libVlc;
             _mediaPlayer = mediaPlayer;
             _trackController = new LibVlcTrackController(mediaPlayer);
+            _navigationController = new LibVlcNavigationController(mediaPlayer);
 
             HookEvents();
             _stateMachine.StateChanged += OnStateMachineStateChanged;
@@ -73,6 +75,15 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         {
             ThrowIfDisposed();
             return _trackController;
+        }
+    }
+
+    public IPlaybackNavigationController Navigation
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _navigationController;
         }
     }
 
@@ -179,6 +190,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             {
                 using var media = new Media(_libVlc, source.Uri);
                 _trackController.Reset();
+                _navigationController.Reset();
                 _mediaPlayer.Media = media;
                 _hasMedia = true;
 
@@ -372,6 +384,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             UnhookEvents();
             _stateMachine.StateChanged -= OnStateMachineStateChanged;
             await _trackController.DisposeAsync().ConfigureAwait(false);
+            await _navigationController.DisposeAsync().ConfigureAwait(false);
 
             _mediaPlayer.Dispose();
             _libVlc.Dispose();
