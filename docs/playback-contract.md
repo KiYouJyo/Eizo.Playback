@@ -11,6 +11,7 @@ The public engine contract must never expose:
 - `Media`
 - `VLCState`
 - `TrackDescription`
+- `ChapterDescription`
 - any other LibVLCSharp type
 
 The Eizo application may reference `Eizo.Playback.LibVLC.WinUI` to host video, but playback control continues through `IPlaybackEngine`.
@@ -53,10 +54,6 @@ On WinUI 3, `PlaybackView` owns creation of the LibVLC-backed engine because Lib
 
 The engine exposed through `PlaybackView.Engine` is valid only for the current live surface.
 
-If the surface unloads and is later recreated, `EngineChanged` may provide a new engine instance.
-
-The Eizo application must not cache a surface-scoped engine indefinitely across view destruction.
-
 ## Media tracks
 
 Track operations are available through `IPlaybackEngine.Tracks`.
@@ -65,9 +62,32 @@ The public controller exposes backend-neutral audio, video and subtitle models.
 
 A nullable selected-track ID means that track category is currently disabled or has no active selection.
 
-The application must not use negative IDs to disable tracks.
+## Title and chapter navigation
 
-Track metadata may become richer after playback input activation. Use `TracksChanged` or `RefreshAsync` rather than assuming the first snapshot is final.
+Navigation operations are available through `IPlaybackEngine.Navigation`.
+
+The public controller exposes:
+
+- titles
+- chapters for the active/current title context
+- selected title index
+- selected chapter index
+- title selection
+- chapter selection
+- next/previous chapter movement
+
+Title and chapter selected indices are nullable. The application must not depend on LibVLC's negative sentinel indices.
+
+A chapter may include:
+
+- name
+- start time
+- duration
+- computed end time
+
+Start and duration are nullable because some formats/backends expose only chapter names.
+
+A media item may have chapters even when the title list is empty.
 
 ## Position and duration
 
@@ -86,10 +106,6 @@ The public volume range is normalized:
 1.0 = 100%
 ```
 
-Values outside `0.0 .. 1.0`, NaN and infinity are rejected.
-
-The LibVLC adapter maps this range to LibVLC's integer percentage volume.
-
 ## Playback rate
 
 The public playback rate is a positive finite multiplier:
@@ -99,8 +115,6 @@ The public playback rate is a positive finite multiplier:
 0.5 = half speed
 2.0 = double speed
 ```
-
-Backend rejection is surfaced as a `PlaybackException`.
 
 ## Events
 
@@ -116,9 +130,13 @@ The track controller exposes:
 - `TracksChanged`
 - `DelayChanged`
 
+The navigation controller exposes:
+
+- `NavigationChanged`
+
 ### Threading
 
-Playback and track events do **not** have UI-thread affinity.
+Playback, track and navigation events do **not** have UI-thread affinity.
 
 A UI integration layer must marshal event handling to its dispatcher before touching WinUI controls or observable UI state.
 
