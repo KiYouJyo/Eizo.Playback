@@ -197,7 +197,7 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
                     $"LibVLC failed to add external subtitle '{source}'.");
             }
 
-            RefreshCore(PlaybackTrackKind.Subtitle);
+            TryRefresh(PlaybackTrackKind.Subtitle);
         }
         finally
         {
@@ -294,7 +294,7 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
                     $"LibVLC failed to select {kind} track {trackId?.ToString() ?? "disabled"}.");
             }
 
-            RefreshCore(kind);
+            TryRefresh(kind);
         }
         finally
         {
