@@ -342,13 +342,15 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         return Enumerable.Range(0, titleCount)
             .Select(index =>
             {
-                descriptionsById.TryGetValue(index, out var description);
+                var name = descriptionsById.TryGetValue(index, out var description)
+                    ? NormalizeText(description.Name)
+                    : null;
 
                 var chapterCount = _mediaPlayer.ChapterCountForTitle(index);
 
                 return new PlaybackTitleInfo(
                     index,
-                    NormalizeText(description?.Name),
+                    name,
                     Math.Max(chapterCount, 0),
                     selectedTitle == index);
             })
