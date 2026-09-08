@@ -12,6 +12,7 @@ The public engine contract must never expose:
 - `VLCState`
 - `TrackDescription`
 - `ChapterDescription`
+- `MediaStats`
 - any other LibVLCSharp type
 
 The Eizo application may reference `Eizo.Playback.LibVLC.WinUI` to host video, but playback control continues through `IPlaybackEngine`.
@@ -66,28 +67,45 @@ A nullable selected-track ID means that track category is currently disabled or 
 
 Navigation operations are available through `IPlaybackEngine.Navigation`.
 
-The public controller exposes:
+The public controller exposes titles, chapters, current selections and adjacent chapter navigation.
 
-- titles
-- chapters for the active/current title context
-- selected title index
-- selected chapter index
-- title selection
-- chapter selection
-- next/previous chapter movement
+Chapter start/duration values are nullable because not every backend/container exposes complete timing metadata.
 
-Title and chapter selected indices are nullable. The application must not depend on LibVLC's negative sentinel indices.
+## Diagnostics
 
-A chapter may include:
+Runtime information is available through `IPlaybackEngine.Diagnostics`.
 
-- name
-- start time
-- duration
-- computed end time
+The diagnostics controller exposes an immutable `PlaybackDiagnosticsSnapshot`.
 
-Start and duration are nullable because some formats/backends expose only chapter names.
+The snapshot may contain:
 
-A media item may have chapters even when the title list is empty.
+- backend version and wrapper version
+- input category and scheme
+- seek/pause capabilities
+- video-output count
+- runtime FPS
+- buffering percentage
+- scrambled-program state
+- media statistics
+- currently selected track summaries
+- hardware-decoding requested state
+- hardware-decoding active state when provable
+
+### Privacy
+
+Diagnostics must not expose the complete input URI or local path.
+
+This prevents credentials, query tokens, signed URLs or private filesystem locations from leaking into UI/logging surfaces.
+
+### Hardware decoding
+
+`HardwareDecodingRequested` describes configuration.
+
+`HardwareDecodingActive` describes confirmed runtime state.
+
+A backend must use `null` when it cannot prove active hardware decoding.
+
+The LibVLC 3 adapter currently reports `null` for active state rather than inferring it.
 
 ## Position and duration
 
@@ -134,9 +152,13 @@ The navigation controller exposes:
 
 - `NavigationChanged`
 
+The diagnostics controller exposes:
+
+- `DiagnosticsChanged`
+
 ### Threading
 
-Playback, track and navigation events do **not** have UI-thread affinity.
+Playback, track, navigation and diagnostics events do **not** have UI-thread affinity.
 
 A UI integration layer must marshal event handling to its dispatcher before touching WinUI controls or observable UI state.
 
