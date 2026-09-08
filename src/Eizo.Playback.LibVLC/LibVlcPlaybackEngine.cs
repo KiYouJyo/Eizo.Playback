@@ -56,9 +56,23 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
     public PlaybackState State => _stateMachine.State;
 
-    public TimeSpan Position => FromMillisecondsOrZero(_mediaPlayer.Time);
+    public TimeSpan Position
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return FromMillisecondsOrZero(_mediaPlayer.Time);
+        }
+    }
 
-    public TimeSpan Duration => FromMillisecondsOrZero(_mediaPlayer.Length);
+    public TimeSpan Duration
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return FromMillisecondsOrZero(_mediaPlayer.Length);
+        }
+    }
 
     public double Volume
     {
@@ -201,8 +215,6 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 TransitionToFailure(exception);
                 throw exception;
             }
-
-            _stateMachine.SetState(PlaybackState.Playing);
         }
         finally
         {
@@ -222,6 +234,13 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             EnsureMedia();
 
             if (State == PlaybackState.Paused)
+            {
+                return;
+            }
+
+            if (State is PlaybackState.Stopped
+                or PlaybackState.Ended
+                or PlaybackState.Failed)
             {
                 return;
             }
@@ -298,10 +317,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 this,
                 new PlaybackPositionChangedEventArgs(target));
 
-            _stateMachine.SetState(
-                previousState == PlaybackState.Paused
-                    ? PlaybackState.Paused
-                    : PlaybackState.Playing);
+            _stateMachine.SetState(previousState switch
+            {
+                PlaybackState.Paused => PlaybackState.Paused,
+                PlaybackState.Playing or PlaybackState.Buffering => PlaybackState.Playing,
+                _ => previousState
+            });
         }
         finally
         {
