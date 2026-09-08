@@ -30,3 +30,6 @@ jobs:
 
       - name: Test
         run: dotnet test Eizo.Playback.slnx --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack Eizo.Playback.slnx --configuration Release --no-build --output artifacts/packages
