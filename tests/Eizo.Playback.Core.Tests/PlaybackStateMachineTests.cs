@@ -1,3 +1,4 @@
+using Eizo.Playback;
 using Eizo.Playback.Core;
 
 namespace Eizo.Playback.Core.Tests;
