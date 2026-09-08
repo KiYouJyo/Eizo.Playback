@@ -7,7 +7,7 @@ Playback abstraction and LibVLC adapter layer for **Eizo**.
 - Keep Eizo's WinUI 3 UI independent from LibVLC types.
 - Provide a stable playback contract for local and future remote media sources.
 - Keep backend-specific code isolated so another backend can be added later without rewriting the UI.
-- Ship with automated build and contract tests from the start.
+- Ship with automated build, compatibility and contract tests from the start.
 
 ## Repository layout
 
@@ -20,14 +20,16 @@ src/
 
 tests/
   Eizo.Playback.Core.Tests/         Backend-neutral unit tests
-  Eizo.Playback.LibVLC.Tests/       Windows/native LibVLC integration tests
+  Eizo.Playback.LibVLC.Tests/       Windows/native LibVLC + API-boundary tests
 
 docs/
   architecture.md
   chapter-navigation.md
+  compatibility-matrix.md
   dependencies.md
   playback-contract.md
   playback-diagnostics.md
+  release-checklist.md
   track-management.md
   winui-integration.md
 ```
@@ -55,7 +57,7 @@ The Eizo application does not need to reference LibVLCSharp directly.
 
 ## Current status
 
-**Stage 5 — playback diagnostics.**
+**Stage 6 — compatibility and release hardening.**
 
 Implemented:
 
@@ -72,20 +74,16 @@ Implemented:
 - title/chapter discovery and navigation
 - chapter timing
 - backend/runtime diagnostics
-- seek/pause/video-output capability reporting
-- runtime FPS and buffering percentage
-- selected track diagnostic summaries
-- media read/demux/decode/display/loss statistics
-- privacy-safe input classification
-- hardware-decoding requested/confirmed distinction
-- Windows/native integration tests
+- privacy-safe input diagnostics
+- native Windows integration tests
+- public API isolation tests
+- CI-backed compatibility matrix
+- NuGet README and repository metadata
+- CI package artifact retention
+- release checklist
 - NuGet pack validation
 
-Not yet included:
-
-- automatic OP/ED semantic classification
-- compatibility matrix / broader media corpus
-- application player chrome
+Current CI-verified media paths are deliberately narrower than LibVLC's full upstream capability set. See `docs/compatibility-matrix.md`.
 
 ## Build
 
@@ -95,4 +93,9 @@ Requires the .NET 10 SDK.
 dotnet restore Eizo.Playback.slnx
 dotnet build Eizo.Playback.slnx -c Release
 dotnet test Eizo.Playback.slnx -c Release
+dotnet pack Eizo.Playback.slnx -c Release -o artifacts/packages
 ```
+
+## Release note
+
+The repository does not yet declare a project license. That decision is intentionally left to the repository owner rather than inferred from the LibVLC dependency stack.
