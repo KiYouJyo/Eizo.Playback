@@ -10,6 +10,7 @@ The public engine contract must never expose:
 - `MediaPlayer`
 - `Media`
 - `VLCState`
+- `TrackDescription`
 - any other LibVLCSharp type
 
 The Eizo application may reference `Eizo.Playback.LibVLC.WinUI` to host video, but playback control continues through `IPlaybackEngine`.
@@ -56,6 +57,18 @@ If the surface unloads and is later recreated, `EngineChanged` may provide a new
 
 The Eizo application must not cache a surface-scoped engine indefinitely across view destruction.
 
+## Media tracks
+
+Track operations are available through `IPlaybackEngine.Tracks`.
+
+The public controller exposes backend-neutral audio, video and subtitle models.
+
+A nullable selected-track ID means that track category is currently disabled or has no active selection.
+
+The application must not use negative IDs to disable tracks.
+
+Track metadata may become richer after playback input activation. Use `TracksChanged` or `RefreshAsync` rather than assuming the first snapshot is final.
+
 ## Position and duration
 
 `Position` and `Duration` use `TimeSpan`.
@@ -98,9 +111,14 @@ The engine contract exposes:
 - `DurationChanged`
 - `Failed`
 
+The track controller exposes:
+
+- `TracksChanged`
+- `DelayChanged`
+
 ### Threading
 
-Playback events do **not** have UI-thread affinity.
+Playback and track events do **not** have UI-thread affinity.
 
 A UI integration layer must marshal event handling to its dispatcher before touching WinUI controls or observable UI state.
 

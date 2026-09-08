@@ -20,13 +20,13 @@ src/
 
 tests/
   Eizo.Playback.Core.Tests/         Backend-neutral unit tests
-  Eizo.Playback.LibVLC.Tests/       Windows/native LibVLC smoke tests
-  Eizo.Playback.LibVLC.WinUI.Tests/ WinUI bootstrap argument tests
+  Eizo.Playback.LibVLC.Tests/       Windows/native LibVLC integration tests
 
 docs/
   architecture.md
   dependencies.md
   playback-contract.md
+  track-management.md
   winui-integration.md
 ```
 
@@ -53,33 +53,33 @@ The Eizo application does not need to reference LibVLCSharp directly.
 
 ## Current status
 
-**Stage 2 — WinUI video-surface integration.**
+**Stage 3 — media track management.**
 
 Implemented:
 
 - backend initialization
 - local/URI media open
-- play / pause / stop
-- seek
-- normalized volume
-- playback rate
+- play / pause / stop / seek
+- normalized volume and playback rate
 - position and duration
-- playback state bridge
-- position / duration events
-- asynchronous failure event
-- backend-neutral error model
-- deterministic native resource disposal
+- playback state and failure events
 - WinUI 3 `PlaybackView`
 - D3D11 swap-chain bootstrap for LibVLC 3
-- engine recreation when the WinUI surface is recreated
-- Windows LibVLC smoke tests
+- audio/video/subtitle track discovery
+- track selection and disable semantics
+- language / codec / bitrate metadata
+- audio channels and sample rate
+- video resolution and frame rate
+- subtitle encoding
+- external subtitle loading
+- audio and subtitle delay controls
+- LibVLC ES add/delete/select tracking
+- Windows/native integration tests
 - NuGet pack validation
 
 Not yet included:
 
-- audio-track selection
-- subtitle-track selection
-- chapters
+- chapters and title navigation
 - media diagnostics
 - application player chrome
 
