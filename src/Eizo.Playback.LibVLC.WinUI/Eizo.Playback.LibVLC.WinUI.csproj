@@ -16,8 +16,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="LibVLCSharp.WinUI" />
     <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="SharpDX.Direct3D11" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
