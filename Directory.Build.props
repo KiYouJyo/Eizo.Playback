@@ -7,7 +7,7 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
 
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.2.1</VersionPrefix>
     <Authors>KiYouJyo</Authors>
     <RepositoryUrl>https://github.com/KiYouJyo/Eizo.Playback</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
