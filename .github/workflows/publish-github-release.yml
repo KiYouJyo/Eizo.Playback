@@ -1,0 +1,190 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "release/release.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: eizo-playback-github-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: version
+        shell: pwsh
+        run: |
+          $release = Get-Content -LiteralPath release/release.json -Raw | ConvertFrom-Json
+          if ([int]$release.schemaVersion -ne 1) { throw 'Unsupported release metadata schema.' }
+          if (-not $release.publish) { throw 'GitHub publication is disabled.' }
+
+          $version = [string]$release.version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version.' }
+
+          [xml]$props = Get-Content -LiteralPath Directory.Build.props -Raw
+          $sourceVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+          if ($sourceVersion -ne $version) {
+            throw "Source version mismatch. Directory.Build.props=$sourceVersion Expected=$version"
+          }
+
+          foreach ($path in @(
+            "docs/RELEASE-NOTES-v$version.md",
+            "docs/RELEASE-NOTES-v$version.ja.md",
+            "docs/RELEASE-NOTES-v$version.en.md")) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing release notes: $path"
+            }
+          }
+
+          "version=$version" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag=v$version" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Eizo.Playback.slnx
+
+      - name: Build
+        run: dotnet build Eizo.Playback.slnx --configuration Release --no-restore
+
+      - name: Test
+        timeout-minutes: 5
+        run: dotnet test Eizo.Playback.slnx --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack Eizo.Playback.slnx --configuration Release --no-build --output artifacts/packages
+
+      - name: Validate and hash packages
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $expected = @(
+            "Eizo.Playback.Abstractions.$version.nupkg",
+            "Eizo.Playback.Core.$version.nupkg",
+            "Eizo.Playback.LibVLC.$version.nupkg",
+            "Eizo.Playback.LibVLC.WinUI.$version.nupkg"
+          )
+
+          $packages = @(Get-ChildItem artifacts/packages/*.nupkg -File)
+          $actual = @($packages | ForEach-Object Name | Sort-Object)
+          $wanted = @($expected | Sort-Object)
+          if (Compare-Object $wanted $actual) {
+            throw "Unexpected package set. Expected: $($wanted -join ', '); actual: $($actual -join ', ')"
+          }
+
+          $manifest = foreach ($name in $expected) {
+            $path = Join-Path artifacts/packages $name
+            "{0}  {1}" -f (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant(), $name
+          }
+          Set-Content -LiteralPath artifacts/packages/SHA256SUMS.txt -Value $manifest -Encoding ascii
+
+      - name: Create or verify tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          git fetch --tags --force
+          $tagCommit = git rev-list -n 1 $tag 2>$null
+          if ($LASTEXITCODE -eq 0 -and $tagCommit) {
+            if ($tagCommit.Trim() -ne $env:GITHUB_SHA) {
+              throw "Existing tag $tag points to $tagCommit instead of $env:GITHUB_SHA"
+            }
+          }
+          else {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a $tag $env:GITHUB_SHA -m "Eizo.Playback $tag"
+            git push origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to push release tag $tag" }
+          }
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
+          $notes = "docs/RELEASE-NOTES-v$version.md"
+
+          $releaseJson = gh api "repos/${{ github.repository }}/releases/tags/$tag" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if (($releaseJson -join ' ') -notmatch '(?i)404|not found') {
+              throw "Release lookup failed: $($releaseJson -join ' ')"
+            }
+            & gh release create $tag --verify-tag --title "Eizo.Playback $tag" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw "Release creation failed: $LASTEXITCODE" }
+          }
+
+          $assets = @(
+            "Eizo.Playback.Abstractions.$version.nupkg",
+            "Eizo.Playback.Core.$version.nupkg",
+            "Eizo.Playback.LibVLC.$version.nupkg",
+            "Eizo.Playback.LibVLC.WinUI.$version.nupkg",
+            "SHA256SUMS.txt"
+          )
+
+          foreach ($name in $assets) {
+            $path = Join-Path artifacts/packages $name
+            & gh release upload $tag $path --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Release asset upload failed: $name" }
+          }
+
+      - name: Verify published Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
+          $release = gh api "repos/${{ github.repository }}/releases/tags/$tag" | ConvertFrom-Json
+          if ($release.tag_name -ne $tag -or $release.draft -or $release.prerelease) {
+            throw 'Published Release metadata mismatch.'
+          }
+
+          $assets = gh api "repos/${{ github.repository }}/releases/$($release.id)/assets" | ConvertFrom-Json
+          $expected = @(
+            "Eizo.Playback.Abstractions.$version.nupkg",
+            "Eizo.Playback.Core.$version.nupkg",
+            "Eizo.Playback.LibVLC.$version.nupkg",
+            "Eizo.Playback.LibVLC.WinUI.$version.nupkg",
+            "SHA256SUMS.txt"
+          )
+          if (@($assets).Count -ne $expected.Count) {
+            throw "Expected $($expected.Count) assets; found $(@($assets).Count)."
+          }
+          foreach ($name in $expected) {
+            if (@($assets | Where-Object name -eq $name).Count -ne 1) {
+              throw "Published Release is missing $name"
+            }
+          }
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eizo.Playback-${{ steps.version.outputs.version }}-github-release-assets
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
