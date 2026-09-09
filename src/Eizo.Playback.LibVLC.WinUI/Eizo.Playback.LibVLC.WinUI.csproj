@@ -4,6 +4,10 @@
     <AssemblyName>Eizo.Playback.LibVLC.WinUI</AssemblyName>
     <RootNamespace>Eizo.Playback.WinUI</RootNamespace>
     <Description>WinUI 3 video-surface integration for Eizo.Playback's LibVLC backend.</Description>
+    <!-- This package contains no authored WinUI resources. NuGet's SDK pack defaults
+         include .pri outputs, so exclude them explicitly to avoid polluting consuming
+         applications' MRT resource graphs. -->
+    <DefaultAllowedOutputExtensionsInPackageBuildOutputFolder>.dll;.exe;.winmd;.json;.xml</DefaultAllowedOutputExtensionsInPackageBuildOutputFolder>
   </PropertyGroup>
 
   <ItemGroup>
