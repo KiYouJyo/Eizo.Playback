@@ -73,6 +73,52 @@ jobs:
       - name: Pack
         run: dotnet pack Eizo.Playback.slnx --configuration Release --no-build --output artifacts/packages
 
+      - name: Build restart-loadable component payload
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $root = Join-Path artifacts/component "Eizo.Playback-v$version-component"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+          $assemblies = @(
+            @{ Name = 'Eizo.Playback.Abstractions.dll'; Path = 'src/Eizo.Playback.Abstractions/bin/Release/net10.0/Eizo.Playback.Abstractions.dll' },
+            @{ Name = 'Eizo.Playback.Core.dll'; Path = 'src/Eizo.Playback.Core/bin/Release/net10.0/Eizo.Playback.Core.dll' },
+            @{ Name = 'Eizo.Playback.LibVLC.dll'; Path = 'src/Eizo.Playback.LibVLC/bin/Release/net10.0-windows10.0.19041.0/Eizo.Playback.LibVLC.dll' },
+            @{ Name = 'Eizo.Playback.LibVLC.WinUI.dll'; Path = 'src/Eizo.Playback.LibVLC.WinUI/bin/Release/net10.0-windows10.0.19041.0/Eizo.Playback.LibVLC.WinUI.dll' }
+          )
+
+          $manifestAssemblies = @()
+          foreach ($assembly in $assemblies) {
+            $source = Join-Path $PWD $assembly.Path
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Playback component assembly missing: $($assembly.Path)"
+            }
+
+            $destination = Join-Path $root $assembly.Name
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+            $manifestAssemblies += [ordered]@{
+              name = $assembly.Name
+              sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            version = $version
+            contractMajor = 0
+            contractMinor = 1
+            minEizoVersion = '0.2.1'
+            assemblies = $manifestAssemblies
+          }
+
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'component.json') -Encoding utf8
+
+          $zip = Join-Path artifacts/packages "Eizo.Playback-v$version-component.zip"
+          Compress-Archive -Path (Join-Path $root '*') -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+            throw 'Playback component ZIP was not produced.'
+          }
+
       - name: Validate and hash packages
         shell: pwsh
         run: |
@@ -90,6 +136,9 @@ jobs:
           if (Compare-Object $wanted $actual) {
             throw "Unexpected package set. Expected: $($wanted -join ', '); actual: $($actual -join ', ')"
           }
+
+          $componentZip = "Eizo.Playback-v$version-component.zip"
+          $expected += $componentZip
 
           $manifest = foreach ($name in $expected) {
             $path = Join-Path artifacts/packages $name
@@ -141,6 +190,7 @@ jobs:
             "Eizo.Playback.Core.$version.nupkg",
             "Eizo.Playback.LibVLC.$version.nupkg",
             "Eizo.Playback.LibVLC.WinUI.$version.nupkg",
+            "Eizo.Playback-v$version-component.zip",
             "SHA256SUMS.txt"
           )
 
@@ -168,6 +218,7 @@ jobs:
             "Eizo.Playback.Core.$version.nupkg",
             "Eizo.Playback.LibVLC.$version.nupkg",
             "Eizo.Playback.LibVLC.WinUI.$version.nupkg",
+            "Eizo.Playback-v$version-component.zip",
             "SHA256SUMS.txt"
           )
           if (@($assets).Count -ne $expected.Count) {
