@@ -204,6 +204,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             try
             {
                 using var media = new Media(_libVlc, source.Uri);
+                ApplyNetworkAccess(media, source.NetworkAccess);
                 _trackController.Reset();
                 _navigationController.Reset();
                 _mediaPlayer.Media = media;
@@ -588,6 +589,20 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         }
     }
 
+    private static void ApplyNetworkAccess(
+        Media media,
+        PlaybackNetworkAccess? access)
+    {
+        if (access is null || !access.HasCredentials)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(access.UserName))
+            media.AddOption($":http-user={access.UserName}");
+
+        if (access.Password is not null)
+            media.AddOption($":http-pwd={access.Password}");
+    }
+
     private static void ValidateSource(PlaybackSource source)
     {
         if (!source.Uri.IsAbsoluteUri)
@@ -595,6 +610,13 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             throw new PlaybackException(
                 PlaybackErrorCode.InvalidSource,
                 "Playback source URI must be absolute.");
+        }
+
+        if (!string.IsNullOrEmpty(source.Uri.UserInfo))
+        {
+            throw new PlaybackException(
+                PlaybackErrorCode.InvalidSource,
+                "Playback source URI must not embed credentials.");
         }
 
         if (source.Uri.IsFile && !File.Exists(source.Uri.LocalPath))

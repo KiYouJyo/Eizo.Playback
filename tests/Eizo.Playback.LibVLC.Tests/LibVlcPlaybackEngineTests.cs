@@ -63,6 +63,41 @@ public sealed class LibVlcPlaybackEngineTests
     }
 
     [Fact]
+    public void PlaybackNetworkAccessRedactsPassword()
+    {
+        var access = new PlaybackNetworkAccess("alice", "super-secret");
+
+        Assert.True(access.HasCredentials);
+        Assert.Equal("alice", access.UserName);
+        Assert.Equal("super-secret", access.Password);
+        Assert.DoesNotContain("super-secret", access.ToString(), StringComparison.Ordinal);
+        Assert.Contains("<redacted>", access.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromUriRejectsEmbeddedCredentials()
+    {
+        var uri = new Uri("https://alice:secret@example.test/video.mkv");
+
+        Assert.Throws<ArgumentException>(() =>
+            PlaybackSource.FromUri(uri));
+    }
+
+    [Fact]
+    public void FromUriAcceptsSeparateNetworkCredentials()
+    {
+        var source = PlaybackSource.FromUri(
+            new Uri("https://example.test/video.mkv"),
+            "video",
+            new PlaybackNetworkAccess("alice", "secret"));
+
+        Assert.Equal("https://example.test/video.mkv", source.Uri.AbsoluteUri);
+        Assert.Equal("video", source.DisplayName);
+        Assert.Equal("alice", source.NetworkAccess?.UserName);
+        Assert.Equal("secret", source.NetworkAccess?.Password);
+    }
+
+    [Fact]
     public async Task DisposeAsyncIsIdempotent()
     {
         var engine = new LibVlcPlaybackEngine();
