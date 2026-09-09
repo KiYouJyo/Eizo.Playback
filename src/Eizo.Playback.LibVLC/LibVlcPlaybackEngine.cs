@@ -14,6 +14,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private readonly LibVlcDiagnosticsController _diagnosticsController;
 
     private bool _hasMedia;
+    private AuthenticatedHttpMediaInput? _authenticatedHttpInput;
     private int _disposeState;
 
     public LibVlcPlaybackEngine(LibVlcPlaybackOptions? options = null)
@@ -197,14 +198,16 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             if (_hasMedia)
             {
                 await StopCoreAsync(cancellationToken).ConfigureAwait(false);
+                _mediaPlayer.Media = null;
+                _hasMedia = false;
+                DisposeAuthenticatedHttpInput();
             }
 
             _stateMachine.SetState(PlaybackState.Opening);
 
             try
             {
-                using var media = new Media(_libVlc, source.Uri);
-                ApplyNetworkAccess(media, source.NetworkAccess);
+                using var media = CreateMedia(source);
                 _trackController.Reset();
                 _navigationController.Reset();
                 _mediaPlayer.Media = media;
@@ -226,6 +229,8 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             }
             catch (Exception exception) when (exception is not PlaybackException)
             {
+                DisposeAuthenticatedHttpInput();
+
                 throw CreateBackendException(
                     PlaybackErrorCode.OpenFailed,
                     $"Failed to open media source '{source.Uri}'.",
@@ -449,6 +454,8 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 _hasMedia = false;
             }
 
+            DisposeAuthenticatedHttpInput();
+
             UnhookEvents();
             _stateMachine.StateChanged -= OnStateMachineStateChanged;
             await _diagnosticsController.DisposeAsync().ConfigureAwait(false);
@@ -589,18 +596,46 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         }
     }
 
-    private static void ApplyNetworkAccess(
-        Media media,
-        PlaybackNetworkAccess? access)
+    private Media CreateMedia(PlaybackSource source)
     {
-        if (access is null || !access.HasCredentials)
-            return;
+        if (source.NetworkAccess is
+            {
+                HasCredentials: true
+            } access &&
+            source.Uri.Scheme is "http" or "https")
+        {
+            var input = new AuthenticatedHttpMediaInput(
+                source.Uri,
+                access);
 
-        if (!string.IsNullOrWhiteSpace(access.UserName))
-            media.AddOption($":http-user={access.UserName}");
+            try
+            {
+                var media = new Media(
+                    _libVlc,
+                    input);
 
-        if (access.Password is not null)
-            media.AddOption($":http-pwd={access.Password}");
+                _authenticatedHttpInput = input;
+                return media;
+            }
+            catch
+            {
+                input.Dispose();
+                throw;
+            }
+        }
+
+        return new Media(
+            _libVlc,
+            source.Uri);
+    }
+
+    private void DisposeAuthenticatedHttpInput()
+    {
+        var input = Interlocked.Exchange(
+            ref _authenticatedHttpInput,
+            null);
+
+        input?.Dispose();
     }
 
     private static void ValidateSource(PlaybackSource source)
