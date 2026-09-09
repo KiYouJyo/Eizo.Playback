@@ -214,7 +214,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
         }
     }
 
-    public void Dispose()
+    public new void Dispose()
     {
         lock (_sync)
         {
@@ -226,6 +226,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
             _client.Dispose();
         }
 
+        base.Dispose();
         GC.SuppressFinalize(this);
     }
 
