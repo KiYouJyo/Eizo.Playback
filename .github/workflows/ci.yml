@@ -64,6 +64,11 @@ jobs:
               if (-not ($entries | Where-Object { $_ -like '*.nuspec' })) {
                 throw "$($package.Name) does not contain a nuspec"
               }
+
+              if ($package.Name -eq 'Eizo.Playback.LibVLC.WinUI.0.1.0.nupkg' -and
+                  ($entries | Where-Object { $_ -like '*.pri' })) {
+                throw 'Eizo.Playback.LibVLC.WinUI package must not contain PRI files.'
+              }
             }
             finally {
               $archive.Dispose()
