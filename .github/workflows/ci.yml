@@ -29,6 +29,7 @@ jobs:
         run: dotnet build Eizo.Playback.slnx --configuration Release --no-restore
 
       - name: Test
+        timeout-minutes: 5
         run: dotnet test Eizo.Playback.slnx --configuration Release --no-build
 
       - name: Pack
