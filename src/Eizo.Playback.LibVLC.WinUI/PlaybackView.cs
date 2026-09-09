@@ -1,5 +1,4 @@
 using Eizo.Playback.Backends.LibVLC;
-using LibVLCSharp.Platforms.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -7,7 +6,7 @@ namespace Eizo.Playback.WinUI;
 
 public sealed class PlaybackView : Grid, IAsyncDisposable
 {
-    private readonly VideoView _videoView;
+    private readonly LibVlcSwapChainSurface _surface;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
 
     private LibVlcPlaybackEngine? _engine;
@@ -16,15 +15,16 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
 
     public PlaybackView()
     {
-        _videoView = new VideoView
+        _surface = new LibVlcSwapChainSurface
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
 
-        Children.Add(_videoView);
+        Children.Add(_surface);
 
-        _videoView.Initialized += OnVideoViewInitialized;
+        _surface.Initialized += OnSurfaceInitialized;
+        Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
 
@@ -61,13 +61,49 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
             return;
         }
 
-        _videoView.Initialized -= OnVideoViewInitialized;
+        _surface.Initialized -= OnSurfaceInitialized;
+        Loaded -= OnLoaded;
         Unloaded -= OnUnloaded;
 
         await ReleaseEngineAsync().ConfigureAwait(true);
+        _surface.Dispose();
     }
 
-    private async void OnVideoViewInitialized(object? sender, InitializedEventArgs eventArgs)
+    private void OnLoaded(object sender, RoutedEventArgs eventArgs)
+    {
+        try
+        {
+            _surface.Activate();
+        }
+        catch (Exception exception)
+        {
+            InitializationFailed?.Invoke(
+                this,
+                new PlaybackViewInitializationFailedEventArgs(exception));
+        }
+    }
+
+    private async void OnUnloaded(object sender, RoutedEventArgs eventArgs)
+    {
+        try
+        {
+            await ReleaseEngineAsync().ConfigureAwait(true);
+            _surface.Deactivate();
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref _disposeState) != 0)
+        {
+        }
+        catch (Exception exception)
+        {
+            InitializationFailed?.Invoke(
+                this,
+                new PlaybackViewInitializationFailedEventArgs(exception));
+        }
+    }
+
+    private async void OnSurfaceInitialized(
+        object? sender,
+        LibVlcSwapChainSurfaceInitializedEventArgs eventArgs)
     {
         try
         {
@@ -84,24 +120,8 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
         }
     }
 
-    private async void OnUnloaded(object sender, RoutedEventArgs eventArgs)
-    {
-        try
-        {
-            await ReleaseEngineAsync().ConfigureAwait(true);
-        }
-        catch (ObjectDisposedException) when (Volatile.Read(ref _disposeState) != 0)
-        {
-        }
-        catch (Exception exception)
-        {
-            InitializationFailed?.Invoke(
-                this,
-                new PlaybackViewInitializationFailedEventArgs(exception));
-        }
-    }
-
-    private async Task InitializeEngineAsync(IReadOnlyList<string> swapChainOptions)
+    private async Task InitializeEngineAsync(
+        IReadOnlyList<string> swapChainOptions)
     {
         if (Volatile.Read(ref _disposeState) != 0)
         {
@@ -121,7 +141,6 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
 
             if (previousEngine is not null)
             {
-                _videoView.MediaPlayer = null;
                 await previousEngine.DisposeAsync().ConfigureAwait(true);
             }
 
@@ -131,7 +150,6 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
 
             var currentEngine = new LibVlcPlaybackEngine(options);
 
-            _videoView.MediaPlayer = currentEngine.NativeMediaPlayer;
             Volatile.Write(ref _engine, currentEngine);
 
             EngineChanged?.Invoke(
@@ -159,7 +177,6 @@ public sealed class PlaybackView : Grid, IAsyncDisposable
                 return;
             }
 
-            _videoView.MediaPlayer = null;
             await previousEngine.DisposeAsync().ConfigureAwait(true);
 
             EngineChanged?.Invoke(

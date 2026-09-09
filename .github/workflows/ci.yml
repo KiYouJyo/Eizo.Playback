@@ -29,6 +29,7 @@ jobs:
         run: dotnet build Eizo.Playback.slnx --configuration Release --no-restore
 
       - name: Test
+        timeout-minutes: 5
         run: dotnet test Eizo.Playback.slnx --configuration Release --no-build
 
       - name: Pack
@@ -65,9 +66,26 @@ jobs:
                 throw "$($package.Name) does not contain a nuspec"
               }
 
-              if ($package.Name -eq 'Eizo.Playback.LibVLC.WinUI.0.1.0.nupkg' -and
-                  ($entries | Where-Object { $_ -like '*.pri' })) {
-                throw 'Eizo.Playback.LibVLC.WinUI package must not contain PRI files.'
+              if ($package.Name -eq 'Eizo.Playback.LibVLC.WinUI.0.1.0.nupkg') {
+                if ($entries | Where-Object { $_ -like '*.pri' }) {
+                  throw 'Eizo.Playback.LibVLC.WinUI package must not contain PRI files.'
+                }
+
+                $nuspecEntry = $archive.Entries |
+                  Where-Object { $_.FullName -like '*.nuspec' } |
+                  Select-Object -First 1
+
+                $reader = [System.IO.StreamReader]::new($nuspecEntry.Open())
+                try {
+                  $nuspecText = $reader.ReadToEnd()
+                }
+                finally {
+                  $reader.Dispose()
+                }
+
+                if ($nuspecText -match 'LibVLCSharp\.WinUI') {
+                  throw 'Eizo.Playback.LibVLC.WinUI must not depend on LibVLCSharp.WinUI.'
+                }
               }
             }
             finally {
