@@ -253,6 +253,11 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             ThrowIfDisposed();
             EnsureMedia();
 
+            if (State == PlaybackState.Ended)
+            {
+                await ResetEndedMediaAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             _stateMachine.SetState(PlaybackState.Opening);
 
             if (!_mediaPlayer.Play())
@@ -359,6 +364,52 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 ? duration
                 : position;
 
+            if (previousState == PlaybackState.Ended)
+            {
+                await ResetEndedMediaAsync(cancellationToken).ConfigureAwait(false);
+
+                if (target <= TimeSpan.Zero)
+                {
+                    return;
+                }
+
+                _stateMachine.SetState(PlaybackState.Opening);
+
+                if (!_mediaPlayer.Play())
+                {
+                    var exception = CreateBackendException(
+                        PlaybackErrorCode.PlayFailed,
+                        "LibVLC rejected the restart required for seeking from the ended state.");
+
+                    TransitionToFailure(exception);
+                    throw exception;
+                }
+
+                for (var attempt = 0; attempt < 40 && !_mediaPlayer.IsSeekable; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!_mediaPlayer.IsSeekable)
+                {
+                    throw new PlaybackException(
+                        PlaybackErrorCode.NotSeekable,
+                        "The current media source did not become seekable after restarting from the ended state.");
+                }
+
+                _stateMachine.SetState(PlaybackState.Seeking);
+                _mediaPlayer.SeekTo(target);
+                _mediaPlayer.SetPause(true);
+
+                PositionChanged?.Invoke(
+                    this,
+                    new PlaybackPositionChangedEventArgs(target));
+
+                _stateMachine.SetState(PlaybackState.Paused);
+                return;
+            }
+
             _stateMachine.SetState(PlaybackState.Seeking);
             _mediaPlayer.SeekTo(target);
 
@@ -411,6 +462,18 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             _operationGate.Release();
             _operationGate.Dispose();
         }
+    }
+
+    private async Task ResetEndedMediaAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await Task.Run(_mediaPlayer.Stop, cancellationToken).ConfigureAwait(false);
+
+        _stateMachine.SetState(PlaybackState.Stopped);
+        PositionChanged?.Invoke(
+            this,
+            new PlaybackPositionChangedEventArgs(TimeSpan.Zero));
     }
 
     private async Task StopCoreAsync(CancellationToken cancellationToken)
