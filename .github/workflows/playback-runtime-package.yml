@@ -1,0 +1,137 @@
+name: Playback runtime package
+
+on:
+  push:
+    branches:
+      - "codex/playback-runtime-release"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: playback-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore Eizo.Playback.slnx
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          dotnet build Eizo.Playback.slnx --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Playback build failed: $LASTEXITCODE" }
+          dotnet test Eizo.Playback.slnx --configuration Release --no-build
+          if ($LASTEXITCODE -ne 0) { throw "Playback tests failed: $LASTEXITCODE" }
+
+      - name: Build Playback runtime payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '0.2.1'
+          $build = Join-Path $env:RUNNER_TEMP 'playback-runtime-build'
+          $root = Join-Path $env:RUNNER_TEMP "Eizo.Playback.Runtime-v$version-x64"
+          $bin = Join-Path $root 'bin'
+          New-Item -ItemType Directory -Force -Path $build,$bin | Out-Null
+
+          dotnet build src/Eizo.Playback.LibVLC.WinUI/Eizo.Playback.LibVLC.WinUI.csproj --configuration Release --no-restore --output $build
+          if ($LASTEXITCODE -ne 0) { throw "Playback runtime build failed: $LASTEXITCODE" }
+
+          $required = @(
+            'Eizo.Playback.Abstractions.dll',
+            'Eizo.Playback.Core.dll',
+            'Eizo.Playback.LibVLC.dll',
+            'Eizo.Playback.LibVLC.WinUI.dll'
+          )
+          foreach ($name in $required) {
+            $source = Join-Path $build $name
+            if (-not (Test-Path $source)) { throw "Playback runtime assembly missing: $name" }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $bin $name) -Force
+          }
+
+          $anchor = Join-Path $bin 'Eizo.Playback.LibVLC.WinUI.dll'
+          $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($anchor).Version
+          $abiVersion = "{0}.{1}.{2}" -f $assemblyVersion.Major, $assemblyVersion.Minor, [Math]::Max(0, $assemblyVersion.Build)
+
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            component = 'Eizo.Playback'
+            version = $version
+            abiVersion = $abiVersion
+            tag = "v$version"
+            commit = '${{ github.sha }}'
+            runtime = 'x64'
+            framework = 'net10.0'
+            sourceRepository = 'KiYouJyo/Eizo.Playback'
+            modules = @(
+              'Eizo.Playback.Abstractions',
+              'Eizo.Playback.Core',
+              'Eizo.Playback.LibVLC',
+              'Eizo.Playback.LibVLC.WinUI'
+            )
+            hostContract = [ordered]@{
+              name = 'Eizo.Playback.Host'
+              minVersion = '1.0.0'
+              maxVersionExclusive = '2.0.0'
+            }
+          }
+          $manifestPath = Join-Path $root 'eizo-playback-release.json'
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+
+          $zip = Join-Path $env:RUNNER_TEMP "Eizo.Playback.Runtime-v$version-x64.zip"
+          Compress-Archive -Path (Join-Path $root '*') -DestinationPath $zip -CompressionLevel Optimal
+
+          $extract = Join-Path $env:RUNNER_TEMP 'playback-runtime-verify'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          foreach ($relative in @('eizo-playback-release.json') + ($required | ForEach-Object { "bin/$_" })) {
+            if (-not (Test-Path (Join-Path $extract $relative))) { throw "Runtime archive missing: $relative" }
+          }
+
+          Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $env:RUNNER_TEMP 'eizo-playback-release.json') -Force
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $zip -Leaf)" | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'SHA256SUMS.txt') -Encoding ascii
+          Write-Host "Playback runtime package PASS: $zip; ABI=$abiVersion"
+
+      - name: Upload Playback runtime assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eizo-Playback-runtime-v0.2.1-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/Eizo.Playback.Runtime-v0.2.1-x64.zip
+            ${{ runner.temp }}/eizo-playback-release.json
+            ${{ runner.temp }}/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish Playback runtime v0.2.1
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (gh release view v0.2.1 2>$null) {
+            Write-Host 'Eizo.Playback v0.2.1 already exists; leaving the published release immutable.'
+            exit 0
+          }
+          gh release create v0.2.1 `
+            --target $env:GITHUB_SHA `
+            --title 'Eizo.Playback v0.2.1' `
+            --notes 'Initial independently updateable Playback runtime channel for Eizo 0.3.6. Playback updates are downloaded and verified in Eizo, then activated after an explicit restart.' `
+            (Join-Path $env:RUNNER_TEMP 'Eizo.Playback.Runtime-v0.2.1-x64.zip') `
+            (Join-Path $env:RUNNER_TEMP 'eizo-playback-release.json') `
+            (Join-Path $env:RUNNER_TEMP 'SHA256SUMS.txt')
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed: $LASTEXITCODE" }
