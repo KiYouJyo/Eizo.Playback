@@ -29,6 +29,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private bool _hasMedia;
     private AuthenticatedHttpMediaInput? _authenticatedHttpInput;
     private RandomAccessMediaInput? _randomAccessMediaInput;
+    private int _disposeRequested;
     private int _disposeState;
 
     public LibVlcPlaybackEngine(LibVlcPlaybackOptions? options = null)
@@ -500,10 +501,17 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
     public ValueTask DisposeAsync()
     {
-        // Cancel every queued/in-flight operation and interrupt a native input
-        // callback so disposal can never hang behind a stuck open/read.
+        if (Interlocked.Exchange(
+                ref _disposeRequested,
+                1) != 0)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        // Cancel every queued/in-flight operation and interrupt native inputs
+        // so disposal can never hang behind a stuck open/read.
         _lifetime.Cancel();
-        Volatile.Read(ref _authenticatedHttpInput)?.Interrupt();
+        InterruptMediaInputs();
         return new(_operations.CompleteAsync(DisposeCoreAsync));
     }
 
