@@ -1,9 +1,11 @@
+using Eizo.Playback.Core;
 using LibVLCSharp.Shared;
 
 namespace Eizo.Playback.Backends.LibVLC;
 
 internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDisposable
 {
+    private readonly PlaybackOperationQueue _operations;
     private readonly MediaPlayer _mediaPlayer;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _snapshotGate = new();
@@ -17,8 +19,9 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
     private int? _selectedSubtitleTrackId;
     private int _disposeState;
 
-    public LibVlcTrackController(MediaPlayer mediaPlayer)
+    public LibVlcTrackController(MediaPlayer mediaPlayer, PlaybackOperationQueue operations)
     {
+        _operations = operations;
         _mediaPlayer = mediaPlayer ?? throw new ArgumentNullException(nameof(mediaPlayer));
 
         _mediaPlayer.Playing += OnPlaying;
@@ -115,7 +118,10 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
 
     public event EventHandler<PlaybackDelayChangedEventArgs>? DelayChanged;
 
-    public async ValueTask RefreshAsync(CancellationToken cancellationToken = default)
+    public ValueTask RefreshAsync(CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcTrackController.RefreshAsync", () => RefreshCoreAsync(cancellationToken), cancellationToken);
+
+    private async ValueTask RefreshCoreAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -159,7 +165,13 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
             static (player, id) => player.SetSpu(id),
             cancellationToken);
 
-    public async ValueTask AddExternalSubtitleAsync(
+    public ValueTask AddExternalSubtitleAsync(
+        Uri source,
+        bool select = true,
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcTrackController.AddExternalSubtitleAsync", () => AddExternalSubtitleCoreAsync(source, select, cancellationToken), cancellationToken);
+
+    private async ValueTask AddExternalSubtitleCoreAsync(
         Uri source,
         bool select = true,
         CancellationToken cancellationToken = default)
@@ -265,7 +277,14 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
         }
     }
 
-    private async ValueTask SelectTrackAsync(
+    private ValueTask SelectTrackAsync(
+        PlaybackTrackKind kind,
+        int? trackId,
+        Func<MediaPlayer, int, bool> select,
+        CancellationToken cancellationToken) =>
+        _operations.RunAsync("LibVlcTrackController.SelectTrackAsync", () => SelectTrackCoreAsync(kind, trackId, select, cancellationToken), cancellationToken);
+
+    private async ValueTask SelectTrackCoreAsync(
         PlaybackTrackKind kind,
         int? trackId,
         Func<MediaPlayer, int, bool> select,
@@ -302,7 +321,14 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
         }
     }
 
-    private async ValueTask SetDelayAsync(
+    private ValueTask SetDelayAsync(
+        PlaybackDelayKind kind,
+        TimeSpan delay,
+        Func<MediaPlayer, long, bool> set,
+        CancellationToken cancellationToken) =>
+        _operations.RunAsync("LibVlcTrackController.SetDelayAsync", () => SetDelayCoreAsync(kind, delay, set, cancellationToken), cancellationToken);
+
+    private async ValueTask SetDelayCoreAsync(
         PlaybackDelayKind kind,
         TimeSpan delay,
         Func<MediaPlayer, long, bool> set,
@@ -349,6 +375,8 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
         }
     }
 
+    internal void RefreshSnapshot() => RefreshCore(PlaybackTrackKind.All, raiseEvent: false);
+
     private void RefreshCore(
         PlaybackTrackKind changedKind,
         bool raiseEvent = true)
@@ -364,11 +392,15 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
             .GroupBy(static track => track.Id)
             .ToDictionary(static group => group.Key, static group => group.First());
 
+        var audioDescriptions = _mediaPlayer.AudioTrackDescription;
+        var videoDescriptions = _mediaPlayer.VideoTrackDescription;
+        var subtitleDescriptions = _mediaPlayer.SpuDescription;
         var selectedAudio = NormalizeTrackId(_mediaPlayer.AudioTrack);
         var selectedVideo = NormalizeTrackId(_mediaPlayer.VideoTrack);
         var selectedSubtitle = NormalizeTrackId(_mediaPlayer.Spu);
+        PlaybackTrace.Write("tracks", "snapshot", "read", $"{_mediaPlayer.State}:a={selectedAudio}:v={selectedVideo}:s={selectedSubtitle}");
 
-        var audioTracks = _mediaPlayer.AudioTrackDescription
+        var audioTracks = audioDescriptions
             .Where(static description => description.Id >= 0)
             .Select(description =>
                 MapAudioTrack(
@@ -378,7 +410,7 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
                     metadataById))
             .ToArray();
 
-        var videoTracks = _mediaPlayer.VideoTrackDescription
+        var videoTracks = videoDescriptions
             .Where(static description => description.Id >= 0)
             .Select(description =>
                 MapVideoTrack(
@@ -388,7 +420,7 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
                     metadataById))
             .ToArray();
 
-        var subtitleTracks = _mediaPlayer.SpuDescription
+        var subtitleTracks = subtitleDescriptions
             .Where(static description => description.Id >= 0)
             .Select(description =>
                 MapSubtitleTrack(
@@ -398,8 +430,13 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
                     metadataById))
             .ToArray();
 
+        bool changed;
         lock (_snapshotGate)
         {
+            changed = !_audioTracks.SequenceEqual(audioTracks) ||
+                !_videoTracks.SequenceEqual(videoTracks) || !_subtitleTracks.SequenceEqual(subtitleTracks) ||
+                _selectedAudioTrackId != selectedAudio || _selectedVideoTrackId != selectedVideo ||
+                _selectedSubtitleTrackId != selectedSubtitle;
             _audioTracks = Array.AsReadOnly(audioTracks);
             _videoTracks = Array.AsReadOnly(videoTracks);
             _subtitleTracks = Array.AsReadOnly(subtitleTracks);
@@ -408,7 +445,7 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
             _selectedSubtitleTrackId = selectedSubtitle;
         }
 
-        if (raiseEvent)
+        if (raiseEvent && changed)
         {
             TracksChanged?.Invoke(
                 this,
@@ -563,22 +600,15 @@ internal sealed class LibVlcTrackController : IPlaybackTrackController, IAsyncDi
         MediaPlayerESSelectedEventArgs eventArgs) =>
         TryRefresh(ToPlaybackTrackKind(eventArgs.Type));
 
+    private int _refreshPending;
     private void TryRefresh(PlaybackTrackKind kind)
     {
-        if (Volatile.Read(ref _disposeState) != 0)
+        if (Volatile.Read(ref _disposeState) != 0 || Interlocked.Exchange(ref _refreshPending, 1) != 0) return;
+        _operations.Post("event:LibVlcTrackController.refresh", () =>
         {
-            return;
-        }
-
-        try
-        {
-            RefreshCore(kind);
-        }
-        catch
-        {
-            // Native callbacks must never be allowed to escape into LibVLC.
-            // The next explicit RefreshAsync call can surface current data.
-        }
+            Interlocked.Exchange(ref _refreshPending, 0);
+            if (Volatile.Read(ref _disposeState) == 0) { RefreshCore(PlaybackTrackKind.All); }
+        });
     }
 
     private static PlaybackTrackKind ToPlaybackTrackKind(TrackType type) =>

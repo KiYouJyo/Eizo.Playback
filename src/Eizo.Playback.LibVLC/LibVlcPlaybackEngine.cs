@@ -5,7 +5,16 @@ namespace Eizo.Playback.Backends.LibVLC;
 
 public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 {
+    private static readonly object NativeLifetimeGate = new();
+    private static readonly Lazy<bool> NativeInitialized = new(() =>
+    {
+        LibVLCSharp.Shared.Core.Initialize();
+        return true;
+    });
+    private int _mediaGeneration;
     private readonly LibVLCSharp.Shared.LibVLC _libVlc;
+    private readonly PlaybackOperationQueue _operations = new();
+    private readonly CancellationTokenSource _lifetime = new();
     private readonly MediaPlayer _mediaPlayer;
     private readonly PlaybackStateMachine _stateMachine = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
@@ -13,8 +22,14 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     private readonly LibVlcNavigationController _navigationController;
     private readonly LibVlcDiagnosticsController _diagnosticsController;
 
+    private long _positionMilliseconds;
+    private long _durationMilliseconds;
+    private double _volume = 1d;
+    private double _rate = 1d;
     private bool _hasMedia;
     private AuthenticatedHttpMediaInput? _authenticatedHttpInput;
+    private RandomAccessMediaInput? _randomAccessMediaInput;
+    private int _disposeRequested;
     private int _disposeState;
 
     public LibVlcPlaybackEngine(LibVlcPlaybackOptions? options = null)
@@ -26,11 +41,14 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
         try
         {
-            LibVLCSharp.Shared.Core.Initialize();
+            _ = NativeInitialized.Value;
 
-            libVlc = new LibVLCSharp.Shared.LibVLC(
-                options.EnableDebugLogs,
-                options.Arguments.ToArray());
+            lock (NativeLifetimeGate)
+            {
+                libVlc = new LibVLCSharp.Shared.LibVLC(
+                    options.EnableDebugLogs,
+                    options.Arguments.ToArray());
+            }
 
             mediaPlayer = new MediaPlayer(libVlc)
             {
@@ -42,13 +60,13 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
             _libVlc = libVlc;
             _mediaPlayer = mediaPlayer;
-            _trackController = new LibVlcTrackController(mediaPlayer);
-            _navigationController = new LibVlcNavigationController(mediaPlayer);
+            _trackController = new LibVlcTrackController(mediaPlayer, _operations);
+            _navigationController = new LibVlcNavigationController(mediaPlayer, _operations);
             _diagnosticsController = new LibVlcDiagnosticsController(
                 libVlc,
                 mediaPlayer,
                 _trackController,
-                options);
+                options, _operations);
 
             HookEvents();
             _stateMachine.StateChanged += OnStateMachineStateChanged;
@@ -56,7 +74,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         catch (Exception exception)
         {
             mediaPlayer?.Dispose();
-            libVlc?.Dispose();
+            lock (NativeLifetimeGate) libVlc?.Dispose();
 
             throw new PlaybackException(
                 PlaybackErrorCode.BackendInitializationFailed,
@@ -108,7 +126,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         get
         {
             ThrowIfDisposed();
-            return FromMillisecondsOrZero(_mediaPlayer.Time);
+            return FromMillisecondsOrZero(Interlocked.Read(ref _positionMilliseconds));
         }
     }
 
@@ -117,7 +135,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         get
         {
             ThrowIfDisposed();
-            return FromMillisecondsOrZero(_mediaPlayer.Length);
+            return FromMillisecondsOrZero(Interlocked.Read(ref _durationMilliseconds));
         }
     }
 
@@ -126,7 +144,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         get
         {
             ThrowIfDisposed();
-            return Math.Clamp(_mediaPlayer.Volume / 100d, 0d, 1d);
+            return Volatile.Read(ref _volume);
         }
         set
         {
@@ -140,7 +158,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                     "Volume must be a finite value between 0.0 and 1.0.");
             }
 
-            _mediaPlayer.Volume = (int)Math.Round(value * 100d, MidpointRounding.AwayFromZero);
+            _operations.Post("volume", () =>
+            {
+                ThrowIfDisposed();
+                _mediaPlayer.Volume = (int)Math.Round(value * 100d, MidpointRounding.AwayFromZero);
+                Volatile.Write(ref _volume, value);
+            });
         }
     }
 
@@ -149,7 +172,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         get
         {
             ThrowIfDisposed();
-            return _mediaPlayer.Rate;
+            return Volatile.Read(ref _rate);
         }
         set
         {
@@ -163,12 +186,13 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                     "Playback rate must be a finite positive value.");
             }
 
-            if (_mediaPlayer.SetRate((float)value) != 0)
+            _operations.Post("rate", () =>
             {
-                throw CreateBackendException(
-                    PlaybackErrorCode.BackendFailure,
-                    $"LibVLC rejected playback rate {value}.");
-            }
+                ThrowIfDisposed();
+                if (_mediaPlayer.SetRate((float)value) != 0)
+                    TransitionToFailure(CreateBackendException(PlaybackErrorCode.BackendFailure, "LibVLC rejected playback rate."));
+                else Volatile.Write(ref _rate, value);
+            });
         }
     }
 
@@ -184,6 +208,14 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         PlaybackSource source,
         CancellationToken cancellationToken = default)
     {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        await _operations.RunAsync("LibVlcPlaybackEngine.OpenAsync", () => OpenCoreAsync(source, linked.Token), linked.Token);
+    }
+
+    private async ValueTask OpenCoreAsync(
+        PlaybackSource source,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(source);
         ThrowIfDisposed();
 
@@ -195,19 +227,22 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         {
             ThrowIfDisposed();
 
+            Interlocked.Increment(ref _mediaGeneration);
             if (_hasMedia)
             {
                 await StopCoreAsync(cancellationToken).ConfigureAwait(false);
                 _mediaPlayer.Media = null;
                 _hasMedia = false;
-                DisposeAuthenticatedHttpInput();
+                DisposeMediaInputs();
             }
 
+            Interlocked.Exchange(ref _positionMilliseconds, 0);
+            Interlocked.Exchange(ref _durationMilliseconds, 0);
             _stateMachine.SetState(PlaybackState.Opening);
 
             try
             {
-                using var media = CreateMedia(source);
+                using var media = CreateMedia(source, cancellationToken);
                 _trackController.Reset();
                 _navigationController.Reset();
                 _mediaPlayer.Media = media;
@@ -229,7 +264,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             }
             catch (Exception exception) when (exception is not PlaybackException)
             {
-                DisposeAuthenticatedHttpInput();
+                DisposeMediaInputs();
 
                 throw CreateBackendException(
                     PlaybackErrorCode.OpenFailed,
@@ -249,6 +284,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     }
 
     public async ValueTask PlayAsync(CancellationToken cancellationToken = default)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        await _operations.RunAsync("LibVlcPlaybackEngine.PlayAsync", () => PlayCoreAsync(linked.Token), linked.Token);
+    }
+
+    private async ValueTask PlayCoreAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -284,6 +325,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
     public async ValueTask PauseAsync(CancellationToken cancellationToken = default)
     {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        await _operations.RunAsync("LibVlcPlaybackEngine.PauseAsync", () => PauseCoreAsync(linked.Token), linked.Token);
+    }
+
+    private async ValueTask PauseCoreAsync(CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
 
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -316,6 +363,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        await _operations.RunAsync("LibVlcPlaybackEngine.StopAsync", () => StopCommandCoreAsync(linked.Token), linked.Token);
+    }
+
+    private async ValueTask StopCommandCoreAsync(CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
 
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -338,6 +391,14 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     }
 
     public async ValueTask SeekAsync(
+        TimeSpan position,
+        CancellationToken cancellationToken = default)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
+        await _operations.RunAsync("LibVlcPlaybackEngine.SeekAsync", () => SeekCoreAsync(position, linked.Token), linked.Token);
+    }
+
+    private async ValueTask SeekCoreAsync(
         TimeSpan position,
         CancellationToken cancellationToken = default)
     {
@@ -406,6 +467,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
                 _stateMachine.SetState(PlaybackState.Seeking);
                 _mediaPlayer.SeekTo(target);
+            Interlocked.Exchange(ref _positionMilliseconds, (long)target.TotalMilliseconds);
                 _mediaPlayer.SetPause(true);
 
                 PositionChanged?.Invoke(
@@ -418,6 +480,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
             _stateMachine.SetState(PlaybackState.Seeking);
             _mediaPlayer.SeekTo(target);
+            Interlocked.Exchange(ref _positionMilliseconds, (long)target.TotalMilliseconds);
 
             PositionChanged?.Invoke(
                 this,
@@ -436,7 +499,23 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(
+                ref _disposeRequested,
+                1) != 0)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        // Cancel every queued/in-flight operation and interrupt native inputs
+        // so disposal can never hang behind a stuck open/read.
+        _lifetime.Cancel();
+        InterruptMediaInputs();
+        return new(_operations.CompleteAsync(DisposeCoreAsync));
+    }
+
+    private async ValueTask DisposeCoreAsync()
     {
         if (Interlocked.Exchange(ref _disposeState, 1) != 0)
         {
@@ -447,6 +526,12 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
 
         try
         {
+            UnhookEvents();
+            _stateMachine.StateChanged -= OnStateMachineStateChanged;
+            await _diagnosticsController.DisposeAsync().ConfigureAwait(false);
+            await _trackController.DisposeAsync().ConfigureAwait(false);
+            await _navigationController.DisposeAsync().ConfigureAwait(false);
+            InterruptMediaInputs();
             if (_hasMedia)
             {
                 await Task.Run(_mediaPlayer.Stop).ConfigureAwait(false);
@@ -454,21 +539,17 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 _hasMedia = false;
             }
 
-            DisposeAuthenticatedHttpInput();
+            DisposeMediaInputs();
 
-            UnhookEvents();
-            _stateMachine.StateChanged -= OnStateMachineStateChanged;
-            await _diagnosticsController.DisposeAsync().ConfigureAwait(false);
-            await _trackController.DisposeAsync().ConfigureAwait(false);
-            await _navigationController.DisposeAsync().ConfigureAwait(false);
 
             _mediaPlayer.Dispose();
-            _libVlc.Dispose();
+            lock (NativeLifetimeGate) _libVlc.Dispose();
         }
         finally
         {
             _operationGate.Release();
             _operationGate.Dispose();
+            _lifetime.Dispose();
         }
     }
 
@@ -476,8 +557,10 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        InterruptMediaInputs();
         await Task.Run(_mediaPlayer.Stop, cancellationToken).ConfigureAwait(false);
 
+        Interlocked.Exchange(ref _positionMilliseconds, 0);
         _stateMachine.SetState(PlaybackState.Stopped);
         PositionChanged?.Invoke(
             this,
@@ -488,8 +571,10 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        InterruptMediaInputs();
         await Task.Run(_mediaPlayer.Stop).ConfigureAwait(false);
 
+        Interlocked.Exchange(ref _positionMilliseconds, 0);
         _stateMachine.SetState(PlaybackState.Stopped);
         PositionChanged?.Invoke(
             this,
@@ -522,39 +607,69 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         _mediaPlayer.LengthChanged -= OnLengthChanged;
     }
 
-    private void OnOpening(object? sender, EventArgs eventArgs) =>
-        _stateMachine.SetState(PlaybackState.Opening);
-
-    private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs eventArgs)
+    private void PostMediaEvent(string name, Action action)
     {
-        if (eventArgs.Cache < 100f)
+        var generation = Volatile.Read(ref _mediaGeneration);
+        _operations.Post("event:" + name, () =>
         {
-            _stateMachine.SetState(PlaybackState.Buffering);
-        }
-        else if (_mediaPlayer.IsPlaying)
-        {
-            _stateMachine.SetState(PlaybackState.Playing);
-        }
+            if (generation == Volatile.Read(ref _mediaGeneration) && Volatile.Read(ref _disposeState) == 0) action();
+        });
     }
+
+    private void ReconcileNativeState()
+    {
+        var state = _mediaPlayer.State switch
+        {
+            VLCState.Opening => PlaybackState.Opening,
+            VLCState.Buffering => PlaybackState.Buffering,
+            VLCState.Playing => PlaybackState.Playing,
+            VLCState.Paused => PlaybackState.Paused,
+            VLCState.Stopped => PlaybackState.Stopped,
+            VLCState.Ended => PlaybackState.Ended,
+            VLCState.Error => PlaybackState.Failed,
+            _ => State
+        };
+        _stateMachine.SetState(state);
+    }
+
+    private void OnOpening(object? sender, EventArgs eventArgs) =>
+        PostMediaEvent("OnOpening", () => OnOpeningCore(sender, eventArgs));
+
+    private void OnOpeningCore(object? sender, EventArgs eventArgs) =>
+        ReconcileNativeState();
+
+    private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs eventArgs) =>
+        PostMediaEvent("OnBuffering", () => OnBufferingCore(sender, eventArgs));
+
+    private void OnBufferingCore(object? sender, MediaPlayerBufferingEventArgs eventArgs) => ReconcileNativeState();
 
     private void OnPlaying(object? sender, EventArgs eventArgs) =>
-        _stateMachine.SetState(PlaybackState.Playing);
+        PostMediaEvent("OnPlaying", () => OnPlayingCore(sender, eventArgs));
+
+    private void OnPlayingCore(object? sender, EventArgs eventArgs) =>
+        ReconcileNativeState();
 
     private void OnPaused(object? sender, EventArgs eventArgs) =>
-        _stateMachine.SetState(PlaybackState.Paused);
+        PostMediaEvent("OnPaused", () => OnPausedCore(sender, eventArgs));
 
-    private void OnStopped(object? sender, EventArgs eventArgs)
-    {
-        if (State is not PlaybackState.Ended and not PlaybackState.Failed)
-        {
-            _stateMachine.SetState(PlaybackState.Stopped);
-        }
-    }
+    private void OnPausedCore(object? sender, EventArgs eventArgs) =>
+        ReconcileNativeState();
+
+    private void OnStopped(object? sender, EventArgs eventArgs) =>
+        PostMediaEvent("OnStopped", () => OnStoppedCore(sender, eventArgs));
+
+    private void OnStoppedCore(object? sender, EventArgs eventArgs) => ReconcileNativeState();
 
     private void OnEndReached(object? sender, EventArgs eventArgs) =>
-        _stateMachine.SetState(PlaybackState.Ended);
+        PostMediaEvent("OnEndReached", () => OnEndReachedCore(sender, eventArgs));
 
-    private void OnEncounteredError(object? sender, EventArgs eventArgs)
+    private void OnEndReachedCore(object? sender, EventArgs eventArgs) =>
+        ReconcileNativeState();
+
+    private void OnEncounteredError(object? sender, EventArgs eventArgs) =>
+        PostMediaEvent("OnEncounteredError", () => OnEncounteredErrorCore(sender, eventArgs));
+
+    private void OnEncounteredErrorCore(object? sender, EventArgs eventArgs)
     {
         var exception = CreateBackendException(
             PlaybackErrorCode.BackendFailure,
@@ -564,21 +679,30 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
     }
 
     private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs eventArgs) =>
-        PositionChanged?.Invoke(
-            this,
-            new PlaybackPositionChangedEventArgs(
-                FromMillisecondsOrZero(eventArgs.Time)));
+        PostMediaEvent("OnTimeChanged", () => OnTimeChangedCore(sender, eventArgs));
+
+    private void OnTimeChangedCore(object? sender, MediaPlayerTimeChangedEventArgs eventArgs)
+    {
+        Interlocked.Exchange(ref _positionMilliseconds, eventArgs.Time);
+        PositionChanged?.Invoke(this, new PlaybackPositionChangedEventArgs(FromMillisecondsOrZero(eventArgs.Time)));
+    }
 
     private void OnLengthChanged(object? sender, MediaPlayerLengthChangedEventArgs eventArgs) =>
-        DurationChanged?.Invoke(
-            this,
-            new PlaybackDurationChangedEventArgs(
-                FromMillisecondsOrZero(eventArgs.Length)));
+        PostMediaEvent("OnLengthChanged", () => OnLengthChangedCore(sender, eventArgs));
+
+    private void OnLengthChangedCore(object? sender, MediaPlayerLengthChangedEventArgs eventArgs)
+    {
+        Interlocked.Exchange(ref _durationMilliseconds, eventArgs.Length);
+        DurationChanged?.Invoke(this, new PlaybackDurationChangedEventArgs(FromMillisecondsOrZero(eventArgs.Length)));
+    }
 
     private void OnStateMachineStateChanged(
         object? sender,
-        PlaybackStateChangedEventArgs eventArgs) =>
+        PlaybackStateChangedEventArgs eventArgs)
+    {
+        PlaybackTrace.Write("engine", "state", "changed", $"{eventArgs.PreviousState}->{eventArgs.CurrentState}");
         StateChanged?.Invoke(this, eventArgs);
+    }
 
     private void TransitionToFailure(PlaybackException exception)
     {
@@ -596,8 +720,30 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         }
     }
 
-    private Media CreateMedia(PlaybackSource source)
+    private Media CreateMedia(PlaybackSource source, CancellationToken cancellationToken)
     {
+        if (source.RandomAccessSource is { } randomAccessSource)
+        {
+            var input = new RandomAccessMediaInput(
+                randomAccessSource,
+                cancellationToken);
+
+            try
+            {
+                var media = new Media(
+                    _libVlc,
+                    input);
+
+                _randomAccessMediaInput = input;
+                return media;
+            }
+            catch
+            {
+                input.Dispose();
+                throw;
+            }
+        }
+
         if (source.NetworkAccess is
             {
                 HasCredentials: true
@@ -606,7 +752,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         {
             var input = new AuthenticatedHttpMediaInput(
                 source.Uri,
-                access);
+                access, cancellationToken);
 
             try
             {
@@ -629,13 +775,23 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
             source.Uri);
     }
 
-    private void DisposeAuthenticatedHttpInput()
+    private void InterruptMediaInputs()
     {
-        var input = Interlocked.Exchange(
+        Volatile.Read(ref _authenticatedHttpInput)?.Interrupt();
+        Volatile.Read(ref _randomAccessMediaInput)?.Interrupt();
+    }
+
+    private void DisposeMediaInputs()
+    {
+        var authenticated = Interlocked.Exchange(
             ref _authenticatedHttpInput,
             null);
+        authenticated?.Dispose();
 
-        input?.Dispose();
+        var randomAccess = Interlocked.Exchange(
+            ref _randomAccessMediaInput,
+            null);
+        randomAccess?.Dispose();
     }
 
     private static void ValidateSource(PlaybackSource source)
@@ -654,7 +810,9 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
                 "Playback source URI must not embed credentials.");
         }
 
-        if (source.Uri.IsFile && !File.Exists(source.Uri.LocalPath))
+        if (source.RandomAccessSource is null &&
+            source.Uri.IsFile &&
+            !File.Exists(source.Uri.LocalPath))
         {
             throw new PlaybackException(
                 PlaybackErrorCode.FileNotFound,

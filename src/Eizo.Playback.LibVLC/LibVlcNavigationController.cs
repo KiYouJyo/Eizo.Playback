@@ -1,3 +1,4 @@
+using Eizo.Playback.Core;
 using LibVLCSharp.Shared;
 using LibVLCSharp.Shared.Structures;
 
@@ -5,6 +6,7 @@ namespace Eizo.Playback.Backends.LibVLC;
 
 internal sealed class LibVlcNavigationController : IPlaybackNavigationController, IAsyncDisposable
 {
+    private readonly PlaybackOperationQueue _operations;
     private readonly MediaPlayer _mediaPlayer;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _snapshotGate = new();
@@ -15,8 +17,9 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
     private int? _selectedChapterIndex;
     private int _disposeState;
 
-    public LibVlcNavigationController(MediaPlayer mediaPlayer)
+    public LibVlcNavigationController(MediaPlayer mediaPlayer, PlaybackOperationQueue operations)
     {
+        _operations = operations;
         _mediaPlayer = mediaPlayer ?? throw new ArgumentNullException(nameof(mediaPlayer));
 
         _mediaPlayer.Playing += OnPlaying;
@@ -70,7 +73,10 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
 
     public event EventHandler<PlaybackNavigationChangedEventArgs>? NavigationChanged;
 
-    public async ValueTask RefreshAsync(CancellationToken cancellationToken = default)
+    public ValueTask RefreshAsync(CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcNavigationController.RefreshAsync", () => RefreshCoreAsync(cancellationToken), cancellationToken);
+
+    private async ValueTask RefreshCoreAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -87,7 +93,12 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         }
     }
 
-    public async ValueTask SelectTitleAsync(
+    public ValueTask SelectTitleAsync(
+        int titleIndex,
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcNavigationController.SelectTitleAsync", () => SelectTitleCoreAsync(titleIndex, cancellationToken), cancellationToken);
+
+    private async ValueTask SelectTitleCoreAsync(
         int titleIndex,
         CancellationToken cancellationToken = default)
     {
@@ -116,7 +127,12 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         }
     }
 
-    public async ValueTask SelectChapterAsync(
+    public ValueTask SelectChapterAsync(
+        int chapterIndex,
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcNavigationController.SelectChapterAsync", () => SelectChapterCoreAsync(chapterIndex, cancellationToken), cancellationToken);
+
+    private async ValueTask SelectChapterCoreAsync(
         int chapterIndex,
         CancellationToken cancellationToken = default)
     {
@@ -145,7 +161,11 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         }
     }
 
-    public async ValueTask<bool> NextChapterAsync(
+    public ValueTask<bool> NextChapterAsync(
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcNavigationController.NextChapterAsync", () => NextChapterCoreAsync(cancellationToken), cancellationToken);
+
+    private async ValueTask<bool> NextChapterCoreAsync(
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -190,7 +210,11 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         }
     }
 
-    public async ValueTask<bool> PreviousChapterAsync(
+    public ValueTask<bool> PreviousChapterAsync(
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcNavigationController.PreviousChapterAsync", () => PreviousChapterCoreAsync(cancellationToken), cancellationToken);
+
+    private async ValueTask<bool> PreviousChapterCoreAsync(
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -446,22 +470,15 @@ internal sealed class LibVlcNavigationController : IPlaybackNavigationController
         MediaPlayerChapterChangedEventArgs eventArgs) =>
         TryRefresh(PlaybackNavigationChangeKind.Selection);
 
+    private int _refreshPending;
     private void TryRefresh(PlaybackNavigationChangeKind kind)
     {
-        if (Volatile.Read(ref _disposeState) != 0)
+        if (Volatile.Read(ref _disposeState) != 0 || Interlocked.Exchange(ref _refreshPending, 1) != 0) return;
+        _operations.Post("event:LibVlcNavigationController.refresh", () =>
         {
-            return;
-        }
-
-        try
-        {
-            RefreshCore(kind);
-        }
-        catch
-        {
-            // LibVLC callbacks must never receive exceptions from the adapter.
-            // Callers can use RefreshAsync when they need an explicit snapshot.
-        }
+            Interlocked.Exchange(ref _refreshPending, 0);
+            if (Volatile.Read(ref _disposeState) == 0) { RefreshCore(PlaybackNavigationChangeKind.All); }
+        });
     }
 
     private static int? NormalizeIndex(int index) =>
