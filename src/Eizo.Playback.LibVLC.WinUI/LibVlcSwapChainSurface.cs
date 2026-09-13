@@ -1,3 +1,4 @@
+using Eizo.Playback.Core;
 using System.Runtime.InteropServices;
 using LibVLCSharp.Shared;
 using Microsoft.UI.Xaml;
@@ -10,7 +11,7 @@ using SharpDX.Mathematics.Interop;
 
 namespace Eizo.Playback.WinUI;
 
-internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
+internal sealed class LibVlcSwapChainSurface : Grid, IAsyncDisposable
 {
     private static readonly Guid SwapChainWidthKey =
         new(0xf1b59347, 0x1643, 0x411a, 0xad, 0x6b, 0xc7, 0x80, 0x17, 0x7a, 0x06, 0xb6);
@@ -19,6 +20,10 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
         new(0x6ea976a0, 0x9d60, 0x4bb7, 0xa5, 0xa9, 0x7d, 0xd1, 0x18, 0x7f, 0xc9, 0xbd);
 
     private readonly SwapChainPanel _panel;
+    private readonly PlaybackOperationQueue _updates = new();
+    private sealed record SurfaceSize(double Width, double Height, float ScaleX, float ScaleY);
+    private SurfaceSize _size = new(1, 1, 1, 1);
+    private int _updatePending;
 
     private SharpDX.Direct3D11.Device? _d3dDevice;
     private DeviceContext? _deviceContext;
@@ -53,28 +58,40 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
         TryCreateSurface();
     }
 
-    public void Deactivate()
+    public async Task DeactivateAsync()
     {
-        if (Volatile.Read(ref _disposeState) != 0)
-        {
-            return;
-        }
-
         _active = false;
-        DestroySurface();
+        await _updates.RunAsync("surface-drain", () => ValueTask.CompletedTask);
+        using (var panelNative = ComObject.As<SwapChainPanelNative>(_panel))
+            panelNative.SwapChain = null;
+        await _updates.RunAsync("surface-release", () =>
+        {
+            DestroyNativeResources();
+            return ValueTask.CompletedTask;
+        });
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
-        {
-            return;
-        }
-
-        _active = false;
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0) return;
         _panel.SizeChanged -= OnPanelSizeChanged;
         _panel.CompositionScaleChanged -= OnPanelCompositionScaleChanged;
-        DestroySurface();
+        await DeactivateAsync();
+        await _updates.CompleteAsync(() => ValueTask.CompletedTask);
+    }
+
+    private void QueueSizeUpdate()
+    {
+        Volatile.Write(ref _size, new SurfaceSize(_panel.ActualWidth, _panel.ActualHeight,
+            _panel.CompositionScaleX, _panel.CompositionScaleY));
+        if (Interlocked.Exchange(ref _updatePending, 1) != 0) return;
+        _updates.Post("surface-size", () =>
+        {
+            Interlocked.Exchange(ref _updatePending, 0);
+            var size = Volatile.Read(ref _size);
+            UpdateScale(size.ScaleX, size.ScaleY);
+            UpdateSizeMetadata(size.Width, size.Height, size.ScaleX, size.ScaleY);
+        });
     }
 
     private void OnPanelSizeChanged(object sender, SizeChangedEventArgs eventArgs)
@@ -90,7 +107,7 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
             return;
         }
 
-        UpdateSizeMetadata();
+        QueueSizeUpdate();
     }
 
     private void OnPanelCompositionScaleChanged(
@@ -102,8 +119,7 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
             return;
         }
 
-        UpdateScale();
-        UpdateSizeMetadata();
+        QueueSizeUpdate();
     }
 
     private void TryCreateSurface()
@@ -239,24 +255,29 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
         }
     }
 
-    private void UpdateScale()
+    private void UpdateScale() => UpdateScale(_panel.CompositionScaleX, _panel.CompositionScaleY);
+
+    private void UpdateScale(float scaleX, float scaleY)
     {
         if (_swapChain2 is null ||
             _swapChain2.IsDisposed ||
-            _panel.CompositionScaleX <= 0f ||
-            _panel.CompositionScaleY <= 0f)
+            scaleX <= 0f ||
+            scaleY <= 0f)
         {
             return;
         }
 
         _swapChain2.MatrixTransform = new RawMatrix3x2
         {
-            M11 = 1f / _panel.CompositionScaleX,
-            M22 = 1f / _panel.CompositionScaleY
+            M11 = 1f / scaleX,
+            M22 = 1f / scaleY
         };
     }
 
-    private void UpdateSizeMetadata()
+    private void UpdateSizeMetadata() => UpdateSizeMetadata(_panel.ActualWidth, _panel.ActualHeight,
+        _panel.CompositionScaleX, _panel.CompositionScaleY);
+
+    private void UpdateSizeMetadata(double actualWidth, double actualHeight, float scaleX, float scaleY)
     {
         if (_swapChain is null || _swapChain.IsDisposed)
         {
@@ -273,10 +294,10 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
 
             var width = Math.Max(
                 1,
-                (int)Math.Ceiling(_panel.ActualWidth * _panel.CompositionScaleX));
+                (int)Math.Ceiling(actualWidth * scaleX));
             var height = Math.Max(
                 1,
-                (int)Math.Ceiling(_panel.ActualHeight * _panel.CompositionScaleY));
+                (int)Math.Ceiling(actualHeight * scaleY));
 
             Marshal.WriteInt32(widthPointer, width);
             Marshal.WriteInt32(heightPointer, height);
@@ -316,6 +337,11 @@ internal sealed class LibVlcSwapChainSurface : Grid, IDisposable
         {
         }
 
+        DestroyNativeResources();
+    }
+
+    private void DestroyNativeResources()
+    {
         _swapChain2?.Dispose();
         _swapChain2 = null;
 

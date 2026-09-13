@@ -1,3 +1,4 @@
+using Eizo.Playback.Core;
 using LibVLCSharp.Shared;
 
 namespace Eizo.Playback.Backends.LibVLC;
@@ -20,6 +21,7 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
         };
 
     private readonly LibVLCSharp.Shared.LibVLC _libVlc;
+    private readonly PlaybackOperationQueue _operations;
     private readonly MediaPlayer _mediaPlayer;
     private readonly LibVlcTrackController _trackController;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -36,9 +38,10 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
         LibVLCSharp.Shared.LibVLC libVlc,
         MediaPlayer mediaPlayer,
         LibVlcTrackController trackController,
-        LibVlcPlaybackOptions options)
+        LibVlcPlaybackOptions options, PlaybackOperationQueue operations)
     {
         _libVlc = libVlc ?? throw new ArgumentNullException(nameof(libVlc));
+        _operations = operations;
         _mediaPlayer = mediaPlayer ?? throw new ArgumentNullException(nameof(mediaPlayer));
         _trackController = trackController ?? throw new ArgumentNullException(nameof(trackController));
         ArgumentNullException.ThrowIfNull(options);
@@ -76,7 +79,11 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
 
     public event EventHandler<PlaybackDiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
-    public async ValueTask<PlaybackDiagnosticsSnapshot> RefreshAsync(
+    public ValueTask<PlaybackDiagnosticsSnapshot> RefreshAsync(
+        CancellationToken cancellationToken = default) =>
+        _operations.RunAsync("LibVlcDiagnosticsController.RefreshAsync", () => RefreshCoreAsync(cancellationToken), cancellationToken);
+
+    private async ValueTask<PlaybackDiagnosticsSnapshot> RefreshCoreAsync(
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -142,6 +149,8 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
 
     private PlaybackDiagnosticsSnapshot RefreshCore()
     {
+        _trackController.RefreshSnapshot();
+        if (_mediaPlayer.IsPlaying) _bufferingPercent = 100d;
         var snapshot = CreateSnapshot();
 
         lock (_snapshotGate)
@@ -196,34 +205,15 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
             SelectedSubtitleTrack: _trackController.SubtitleTracks.FirstOrDefault(static track => track.IsSelected));
     }
 
+    private int _refreshPending;
     private void TryRefresh()
     {
-        if (Volatile.Read(ref _disposeState) != 0)
+        if (Volatile.Read(ref _disposeState) != 0 || Interlocked.Exchange(ref _refreshPending, 1) != 0) return;
+        _operations.Post("event:LibVlcDiagnosticsController.refresh", () =>
         {
-            return;
-        }
-
-        if (!_gate.Wait(0))
-        {
-            return;
-        }
-
-        try
-        {
-            if (Volatile.Read(ref _disposeState) == 0)
-            {
-                RefreshCore();
-            }
-        }
-        catch
-        {
-            // Diagnostics are observational. Native playback callbacks must not
-            // fail because a diagnostic refresh could not be produced.
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            Interlocked.Exchange(ref _refreshPending, 0);
+            if (Volatile.Read(ref _disposeState) == 0) { RefreshCore(); }
+        });
     }
 
     private void OnBuffering(
@@ -236,11 +226,6 @@ internal sealed class LibVlcDiagnosticsController : IPlaybackDiagnosticsControll
 
     private void OnPlaybackActivity(object? sender, EventArgs eventArgs)
     {
-        if (_mediaPlayer.IsPlaying)
-        {
-            _bufferingPercent = 100d;
-        }
-
         TryRefresh();
     }
 

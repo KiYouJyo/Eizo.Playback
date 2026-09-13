@@ -13,6 +13,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
     private readonly object _sync = new();
     private readonly Uri _uri;
     private readonly HttpClient _client;
+    private CancellationTokenSource _ioCancellation = new();
 
     private HttpResponseMessage? _activeResponse;
     private Stream? _activeStream;
@@ -23,7 +24,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
 
     public AuthenticatedHttpMediaInput(
         Uri uri,
-        PlaybackNetworkAccess access)
+        PlaybackNetworkAccess access, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
         ArgumentNullException.ThrowIfNull(access);
@@ -47,6 +48,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
         _uri = uri;
         _client = CreateClient(uri, access);
 
+        using var registration = cancellationToken.Register(Interrupt);
         Probe();
         CanSeek = _supportsRanges;
     }
@@ -64,6 +66,10 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
             try
             {
                 ThrowIfDisposed();
+                if (_ioCancellation.IsCancellationRequested)
+                {
+                    _ioCancellation = new CancellationTokenSource();
+                }
                 ResetActiveResponse();
                 _position = 0;
                 LastError = null;
@@ -89,7 +95,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
 
         lock (_sync)
         {
-            ThrowIfDisposed();
+            if (_disposed || _ioCancellation.IsCancellationRequested) return -1;
 
             if (_length is { } totalLength &&
                 _position >= totalLength)
@@ -120,10 +126,11 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
                     try
                     {
                         EnsureActiveResponse();
-                        var read = _activeStream!.Read(
-                            rented,
-                            0,
-                            requested);
+                        // LibVLC's C input callback is synchronous. Only its input thread
+                        // waits here; cancellation interrupts both network headers and body reads.
+                        var read = _activeStream!.ReadAsync(
+                            rented.AsMemory(0, requested), _ioCancellation.Token)
+                            .AsTask().GetAwaiter().GetResult();
 
                         if (read > 0)
                         {
@@ -148,12 +155,12 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
                     catch (Exception exception) when (
                         exception is IOException or
                             HttpRequestException or
-                            ObjectDisposedException)
+                            ObjectDisposedException or OperationCanceledException)
                     {
                         LastError = exception;
                         ResetActiveResponse();
 
-                        if (attempt == 1)
+                        if (attempt == 1 || _ioCancellation.IsCancellationRequested)
                             return -1;
                     }
                 }
@@ -214,8 +221,12 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
         }
     }
 
+    // Never take _sync here: Read holds it while waiting on the network.
+    internal void Interrupt() => _ioCancellation.Cancel();
+
     public new void Dispose()
     {
+        Interrupt();
         lock (_sync)
         {
             if (_disposed)
@@ -239,7 +250,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
 
         using var response = _client.Send(
             request,
-            HttpCompletionOption.ResponseHeadersRead);
+            HttpCompletionOption.ResponseHeadersRead, _ioCancellation.Token);
 
         if (response.StatusCode == HttpStatusCode.PartialContent)
         {
@@ -300,7 +311,7 @@ internal sealed class AuthenticatedHttpMediaInput : MediaInput, IDisposable
         {
             response = _client.Send(
                 request,
-                HttpCompletionOption.ResponseHeadersRead);
+                HttpCompletionOption.ResponseHeadersRead, _ioCancellation.Token);
 
             if (_supportsRanges &&
                 response.StatusCode != HttpStatusCode.PartialContent)

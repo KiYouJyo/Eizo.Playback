@@ -57,7 +57,7 @@ public sealed class LibVlcTrackControllerTests
             engine.Tracks.TracksChanged += (_, args) =>
             {
                 if (args.Kind is PlaybackTrackKind.Audio or PlaybackTrackKind.All
-                    && engine.Tracks.AudioTracks.Count > 0)
+                    && engine.Tracks.AudioTracks.Any(static track => track.IsSelected))
                 {
                     tracksReady.TrySetResult();
                 }

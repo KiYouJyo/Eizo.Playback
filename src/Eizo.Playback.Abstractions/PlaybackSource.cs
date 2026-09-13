@@ -3,7 +3,8 @@ namespace Eizo.Playback;
 public sealed record PlaybackSource(
     Uri Uri,
     string? DisplayName = null,
-    PlaybackNetworkAccess? NetworkAccess = null)
+    PlaybackNetworkAccess? NetworkAccess = null,
+    IPlaybackRandomAccessSource? RandomAccessSource = null)
 {
     public static PlaybackSource FromFile(
         string path,
@@ -13,6 +14,31 @@ public sealed record PlaybackSource(
         return new PlaybackSource(
             new Uri(Path.GetFullPath(path)),
             displayName);
+    }
+
+    public static PlaybackSource FromRandomAccess(
+        Uri canonicalUri,
+        IPlaybackRandomAccessSource randomAccessSource,
+        string? displayName = null)
+    {
+        ArgumentNullException.ThrowIfNull(canonicalUri);
+        ArgumentNullException.ThrowIfNull(randomAccessSource);
+
+        if (!canonicalUri.IsAbsoluteUri)
+            throw new ArgumentException(
+                "Playback URI must be absolute.",
+                nameof(canonicalUri));
+
+        if (!string.IsNullOrEmpty(canonicalUri.UserInfo))
+            throw new ArgumentException(
+                "Credentials must not be embedded in the playback URI.",
+                nameof(canonicalUri));
+
+        return new PlaybackSource(
+            canonicalUri,
+            displayName,
+            NetworkAccess: null,
+            RandomAccessSource: randomAccessSource);
     }
 
     public static PlaybackSource FromUri(
