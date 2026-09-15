@@ -49,6 +49,14 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void LibVlcBackendAdvertisesFrameCaptureCapability()
+    {
+        Assert.True(
+            typeof(IPlaybackFrameCapture)
+                .IsAssignableFrom(typeof(LibVlcPlaybackEngine)));
+    }
+
+    [Fact]
     public void AbstractionsPublicSurfaceRemainsBackendNeutral()
     {
         var assembly = typeof(IPlaybackEngine).Assembly;
