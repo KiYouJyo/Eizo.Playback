@@ -531,7 +531,7 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine, IPlaybackFrameCaptur
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!_hasMedia || _mediaPlayer.Vout == 0)
+        if (!_hasMedia || _mediaPlayer.VoutCount == 0)
             return null;
 
         var snapshotDirectory = Path.Combine(
