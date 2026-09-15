@@ -3,7 +3,7 @@ using LibVLCSharp.Shared;
 
 namespace Eizo.Playback.Backends.LibVLC;
 
-public sealed class LibVlcPlaybackEngine : IPlaybackEngine
+public sealed class LibVlcPlaybackEngine : IPlaybackEngine, IPlaybackFrameCapture
 {
     private static readonly object NativeLifetimeGate = new();
     private static readonly Lazy<bool> NativeInitialized = new(() =>
@@ -496,6 +496,109 @@ public sealed class LibVlcPlaybackEngine : IPlaybackEngine
         finally
         {
             _operationGate.Release();
+        }
+    }
+
+    public async ValueTask<byte[]?> CaptureFrameAsync(
+        uint width = 320,
+        uint height = 180,
+        CancellationToken cancellationToken = default)
+    {
+        if (width == 0)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        if (height == 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+
+        using var linked =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                _lifetime.Token,
+                cancellationToken);
+
+        return await _operations.RunAsync(
+            "LibVlcPlaybackEngine.CaptureFrameAsync",
+            () => CaptureFrameCoreAsync(
+                width,
+                height,
+                linked.Token),
+            linked.Token);
+    }
+
+    private async ValueTask<byte[]?> CaptureFrameCoreAsync(
+        uint width,
+        uint height,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_hasMedia || _mediaPlayer.Vout == 0)
+            return null;
+
+        var snapshotDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "Eizo.Playback",
+            "FramePreview");
+        Directory.CreateDirectory(snapshotDirectory);
+
+        var snapshotPath = Path.Combine(
+            snapshotDirectory,
+            $"frame-{Environment.ProcessId}-{Guid.NewGuid():N}.png");
+
+        try
+        {
+            if (!_mediaPlayer.TakeSnapshot(
+                    0,
+                    snapshotPath,
+                    width,
+                    height))
+            {
+                return null;
+            }
+
+            // LibVLC may finish writing the snapshot shortly after TakeSnapshot
+            // returns. Wait briefly for a non-empty file while still honoring
+            // cancellation from fast timeline scrubbing.
+            for (var attempt = 0; attempt < 24; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    if (File.Exists(snapshotPath) &&
+                        new FileInfo(snapshotPath).Length > 0)
+                    {
+                        return await File.ReadAllBytesAsync(
+                            snapshotPath,
+                            cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (IOException)
+                {
+                    // The native writer can hold the file for a moment.
+                }
+
+                await Task.Delay(
+                        TimeSpan.FromMilliseconds(15),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(snapshotPath))
+                    File.Delete(snapshotPath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 
